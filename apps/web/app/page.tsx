@@ -62,16 +62,14 @@ export default function DashboardPage() {
                 {
                   retries: 6,
                   delayMs: 500,
-                  // Per-attempt trace so a device retest can show what
-                  // the provider actually does between retries (without
-                  // needing DevTools). Captures: timing, response shape,
-                  // selectedAddress, enable() existence.
+                  // Per-step + per-attempt trace so a device retest can show
+                  // exactly which fallback won the race (selectedAddress,
+                  // eth_accounts, or a retry of eth_requestAccounts).
                   onTrace: (t) => {
                     log(
-                      `B.trace a=${t.attempt} ${t.elapsedMs}ms ${t.resultKind}${t.resultLen !== undefined ? `(${t.resultLen})` : ""}`,
+                      `B.trace ${t.step} a=${t.attempt} ${t.elapsedMs}ms ${t.resultKind}${t.resultLen !== undefined ? `(${t.resultLen})` : ""}`,
                       {
                         selectedAddress: t.selectedAddress,
-                        enableExists: t.enableExists,
                         errMessage: t.errMessage,
                       },
                     );

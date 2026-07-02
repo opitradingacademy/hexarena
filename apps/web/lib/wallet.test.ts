@@ -8,18 +8,45 @@ describe("getWalletAddress", () => {
     await expect(getWalletAddress(undefined)).resolves.toBeNull();
   });
 
-  it("returns the first account from eth_requestAccounts", async () => {
+  it("returns the address from provider.selectedAddress without an RPC call", async () => {
+    const request = vi.fn();
+    const result = await getWalletAddress({ request, selectedAddress: ADDRESS });
+    expect(result).toBe(ADDRESS);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("uses eth_accounts as the first RPC step when selectedAddress is empty", async () => {
     const request = vi.fn().mockResolvedValue([ADDRESS]);
-    await expect(getWalletAddress({ request })).resolves.toBe(ADDRESS);
+    const result = await getWalletAddress({ request, selectedAddress: "" });
+    expect(result).toBe(ADDRESS);
+    expect(request).toHaveBeenCalledWith({ method: "eth_accounts" });
+    // eth_requestAccounts not reached
+    expect(request).not.toHaveBeenCalledWith({ method: "eth_requestAccounts" });
+  });
+
+  it("falls back to eth_requestAccounts when eth_accounts is empty", async () => {
+    const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+      if (method === "eth_accounts") return Promise.resolve([]);
+      if (method === "eth_requestAccounts") return Promise.resolve([ADDRESS]);
+      throw new Error("unreachable");
+    });
+    const result = await getWalletAddress({ request, selectedAddress: "" });
+    expect(result).toBe(ADDRESS);
+    expect(request).toHaveBeenCalledWith({ method: "eth_accounts" });
     expect(request).toHaveBeenCalledWith({ method: "eth_requestAccounts" });
   });
 
-  it("returns null when the provider returns no accounts", async () => {
-    const request = vi.fn().mockResolvedValue([]);
-    await expect(getWalletAddress({ request })).resolves.toBeNull();
+  it("returns null when every fallback is exhausted", async () => {
+    const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+      if (method === "eth_accounts") return Promise.resolve([]);
+      if (method === "eth_requestAccounts") return Promise.resolve([]);
+      throw new Error("unreachable");
+    });
+    const result = await getWalletAddress({ request, selectedAddress: "" });
+    expect(result).toBeNull();
   });
 
-  it("returns null when the provider rejects (user denied access)", async () => {
+  it("returns null when the provider rejects the connection", async () => {
     const request = vi.fn().mockRejectedValue(new Error("User rejected"));
     await expect(getWalletAddress({ request })).resolves.toBeNull();
   });
@@ -27,72 +54,124 @@ describe("getWalletAddress", () => {
   it("works with a MiniPay-shaped provider (isMiniPay flag present)", async () => {
     const request = vi.fn().mockResolvedValue([ADDRESS]);
     await expect(getWalletAddress({ request, isMiniPay: true } as never)).resolves.toBe(ADDRESS);
-    expect(request).toHaveBeenCalledWith({ method: "eth_requestAccounts" });
   });
 
-  it("retries eth_requestAccounts when the first call returns [] (MiniPay WebView race)", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([ADDRESS]);
-    const result = await getWalletAddress({ request }, { retries: 3, delayMs: 0 });
-    expect(result).toBe(ADDRESS);
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("respects the existing fast-path: retries=0 means no retry", async () => {
-    const request = vi.fn().mockResolvedValue([]);
-    const result = await getWalletAddress({ request }, { retries: 0, delayMs: 0 });
-    expect(result).toBeNull();
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns null when all retries are exhausted and provider never yields accounts", async () => {
-    const request = vi.fn().mockResolvedValue([]);
-    const result = await getWalletAddress({ request }, { retries: 2, delayMs: 0 });
-    expect(result).toBeNull();
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("emits a trace per attempt with elapsed timing and result shape", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([ADDRESS]);
-    const traces: unknown[] = [];
-    await getWalletAddress({ request }, { retries: 3, delayMs: 0, onTrace: (t) => traces.push(t) });
-    expect(traces).toHaveLength(3);
-    expect(traces[0]).toMatchObject({
-      attempt: 0,
-      resultKind: "array-empty",
-      elapsedMs: expect.any(Number),
+  describe("hierarchical fallback when eth_requestAccounts throws (MiniPay stub bug)", () => {
+    it("uses selectedAddress when present and eth_requestAccounts throws", async () => {
+      const request = vi.fn().mockRejectedValue(new Error("this._request is not a function"));
+      const result = await getWalletAddress(
+        { request, selectedAddress: ADDRESS },
+        { retries: 0, delayMs: 0 },
+      );
+      expect(result).toBe(ADDRESS);
+      expect(request).not.toHaveBeenCalled();
     });
-    expect(traces[2]).toMatchObject({ attempt: 2, resultKind: "array-with", resultLen: 1 });
-  });
 
-  it("captures selectedAddress + enableExists from the provider", async () => {
-    const request = vi.fn().mockResolvedValue([]);
-    const traces: unknown[] = [];
-    await getWalletAddress(
-      { request, selectedAddress: "0xabc", enable: () => Promise.resolve([]) },
-      { retries: 1, delayMs: 0, onTrace: (t) => traces.push(t) },
-    );
-    expect(traces[0]).toMatchObject({
-      selectedAddress: "0xabc",
-      enableExists: true,
+    it("falls back to selectedAddress even when retries=0 (zero RPC)", async () => {
+      const result = await getWalletAddress(
+        { request: vi.fn(), selectedAddress: ADDRESS },
+        { retries: 0, delayMs: 0 },
+      );
+      expect(result).toBe(ADDRESS);
+    });
+
+    it("ignores selectedAddress when it is not a valid address", async () => {
+      const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+        if (method === "eth_accounts") return Promise.resolve([]);
+        if (method === "eth_requestAccounts") return Promise.resolve([ADDRESS]);
+        throw new Error("unreachable");
+      });
+      const result = await getWalletAddress(
+        { request, selectedAddress: "not-an-address" },
+        { retries: 0, delayMs: 0 },
+      );
+      expect(result).toBe(ADDRESS);
+      expect(request).toHaveBeenCalledWith({ method: "eth_requestAccounts" });
+    });
+
+    it("survives eth_accounts throwing — keeps trying eth_requestAccounts", async () => {
+      const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+        if (method === "eth_accounts") throw new Error("eth_accounts unsupported");
+        if (method === "eth_requestAccounts") return Promise.resolve([ADDRESS]);
+        throw new Error("unreachable");
+      });
+      const result = await getWalletAddress(
+        { request, selectedAddress: "" },
+        { retries: 0, delayMs: 0 },
+      );
+      expect(result).toBe(ADDRESS);
+    });
+
+    it("retries eth_requestAccounts when first call returns []", async () => {
+      let n = 0;
+      const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+        if (method === "eth_accounts") return Promise.resolve([]);
+        if (method === "eth_requestAccounts") {
+          n += 1;
+          return n >= 3 ? Promise.resolve([ADDRESS]) : Promise.resolve([]);
+        }
+        throw new Error("unreachable");
+      });
+      const result = await getWalletAddress(
+        { request, selectedAddress: "" },
+        { retries: 3, delayMs: 0 },
+      );
+      expect(result).toBe(ADDRESS);
+    });
+
+    it("returns null after retry exhaustion", async () => {
+      const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+        if (method === "eth_accounts") return Promise.resolve([]);
+        if (method === "eth_requestAccounts") return Promise.resolve([]);
+        throw new Error("unreachable");
+      });
+      const result = await getWalletAddress(
+        { request, selectedAddress: "" },
+        { retries: 2, delayMs: 0 },
+      );
+      expect(result).toBeNull();
     });
   });
 
-  it("records thrown errors with their message", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("Boom"));
-    const traces: unknown[] = [];
-    const result = await getWalletAddress(
-      { request },
-      { retries: 0, delayMs: 0, onTrace: (t) => traces.push(t) },
-    );
-    expect(result).toBeNull();
-    expect(traces[0]).toMatchObject({ resultKind: "throw", errMessage: "Boom" });
+  describe("onTrace breadcrumbs", () => {
+    it("records each step the resolver attempts", async () => {
+      const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+        if (method === "eth_accounts") return Promise.resolve([]);
+        if (method === "eth_requestAccounts") return Promise.resolve([ADDRESS]);
+        throw new Error("unreachable");
+      });
+      const traces: Array<{ step: string; resultKind: string; elapsedMs: number }> = [];
+      await getWalletAddress(
+        { request },
+        {
+          onTrace: (t) =>
+            traces.push({ step: t.step, resultKind: t.resultKind, elapsedMs: t.elapsedMs }),
+        },
+      );
+      expect(traces.map((t) => t.step)).toEqual(["eth_accounts", "eth_requestAccounts"]);
+    });
+
+    it("records the selectedAddress step when it wins", async () => {
+      const request = vi.fn();
+      const traces: Array<{ step: string }> = [];
+      await getWalletAddress(
+        { request, selectedAddress: ADDRESS },
+        { onTrace: (t) => traces.push({ step: t.step }) },
+      );
+      expect(traces).toEqual([{ step: "selectedAddress" }]);
+    });
+
+    it("records errors with their messages", async () => {
+      const request = vi.fn().mockRejectedValue(new Error("Boom"));
+      const traces: Array<{ step: string; resultKind: string; errMessage?: string }> = [];
+      await getWalletAddress(
+        { request },
+        {
+          onTrace: (t) =>
+            traces.push({ step: t.step, resultKind: t.resultKind, errMessage: t.errMessage }),
+        },
+      );
+      expect(traces.some((t) => t.errMessage === "Boom")).toBe(true);
+    });
   });
 });

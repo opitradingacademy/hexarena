@@ -2,20 +2,30 @@
  * Reads the connected wallet address from an EIP-1193 injected provider
  * (MiniPay, or any browser wallet, for testing outside MiniPay).
  *
- * On physical MiniPay WebView, the first `eth_requestAccounts` call
- * occasionally returns `[]` for ~250-750 ms after page mount while the
- * wallet session hydrates inside the WebView. We retry with a short
- * delay when the call succeeds (no throw) but returns an empty array —
- * defaulting to 3 retries × 250ms (1 s total), enough to outlast the
- * hydration window without making desktop callers (MetaMask et al.)
- * block noticeably. Pass `{ retries: 0 }` for the fast-path.
+ * Resolution order (each only attempted if the previous returned nothing):
+ *   1. `provider.selectedAddress` if it's already a valid 0x address.
+ *      No RPC, no permission prompt — the wallet has already authorised
+ *      the session upstream and exposed the address for read.
+ *   2. `eth_accounts` (EIP-1102/RPC). Also no prompt, but lists every
+ *      address the session already controls. MetaMask et al. expose the
+ *      current selection here.
+ *   3. `eth_requestAccounts`. The only call that pops a connect dialog.
+ *      Retried with a short delay when it returns `[]`, because MiniPay's
+ *      provider-stub occasionally returns [] for ~250-750 ms while the
+ *      WebView session hydrates before yielding addresses.
  *
- * For diagnostics on a physical device (no DevTools available there),
- * the retry loop exposes per-attempt breadcrumbs via an onTrace callback.
- * Each trace line includes the attempt index, elapsed ms, the literal
- * shape of the response (array length, string, null, thrown error),
- * and — for each attempt that touches the provider — the in-flight
- * presence of `selectedAddress`, `_state`, and `isConnected` flags.
+ * This fallback order matches what `wagmi`'s `useAccount()` does
+ * internally. It's also the canonical pattern recommended by the
+ * proven-working reference Mini App plus the docs.minipay.xyz
+ * Wallet Connection guide.
+ *
+ * Why the chain matters: the MiniPay dev-mode WebView provider-stub has
+ * an internal bug (`this._request is not a function`) that makes
+ * `eth_requestAccounts` throw — but `selectedAddress` is populated
+ * correctly, so step 1 saves us. On production wallets (MetaMask on
+ * desktop, production-mode MiniPay browser) the order still does the
+ * right thing: step 1 wins if connected, step 2 wins if the dapp was
+ * already authorised in a prior session, step 3 is the cold-start path.
  */
 export type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -26,28 +36,29 @@ export type EthereumProvider = {
 };
 
 export type GetWalletAddressOptions = {
-  /** Number of retries after the first call when the result is []. Default: 3. */
+  /** Number of retries on step 3 when the call returns []. Default: 3. */
   retries?: number;
-  /** Delay between retries in ms. Default: 250. */
+  /** Delay between retries in ms (step 3 only). Default: 250. */
   delayMs?: number;
-  /**
-   * Per-attempt breadcrumb sink. Captures: attempt number, elapsed
-   * milliseconds, shape of the response (kind/length/error), and the
-   * state of the provider after each request returns. Use only for
-   * diagnostics — never block on the listener.
-   */
+  /** Per-attempt breadcrumb sink for diagnostics. */
   onTrace?: (entry: WalletTrace) => void;
 };
 
 export type WalletTrace = {
+  step: "selectedAddress" | "eth_accounts" | "eth_requestAccounts";
   attempt: number;
   elapsedMs: number;
   resultKind: "array-empty" | "array-with" | "string" | "null" | "throw";
   resultLen?: number;
   selectedAddress?: string;
-  enableExists?: boolean;
   errMessage?: string;
 };
+
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+function isAddressLike(value: unknown): value is string {
+  return typeof value === "string" && ADDRESS_RE.test(value);
+}
 
 function describeResult(value: unknown): Pick<WalletTrace, "resultKind" | "resultLen"> {
   if (value === null) return { resultKind: "null" };
@@ -61,6 +72,14 @@ function describeResult(value: unknown): Pick<WalletTrace, "resultKind" | "resul
   return { resultKind: "string" };
 }
 
+function extractFirstAddress(value: unknown): string | null {
+  if (Array.isArray(value) && value.length > 0) {
+    const first = value[0];
+    if (isAddressLike(first)) return first;
+  }
+  return null;
+}
+
 export async function getWalletAddress(
   ethereum: EthereumProvider | undefined,
   options: GetWalletAddressOptions = {},
@@ -71,37 +90,73 @@ export async function getWalletAddress(
   const onTrace = options.onTrace;
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+  // STEP 1: provider.selectedAddress. Free — no RPC, no permission.
+  if (isAddressLike(ethereum.selectedAddress)) {
+    onTrace?.({
+      step: "selectedAddress",
+      attempt: 0,
+      elapsedMs: 0,
+      resultKind: "array-with",
+      resultLen: 1,
+      selectedAddress: ethereum.selectedAddress,
+    });
+    return ethereum.selectedAddress;
+  }
+
+  // STEP 2: eth_accounts. Lists already-authorised addresses, no prompt.
+  if (typeof ethereum.request === "function") {
+    const t0 = Date.now();
+    try {
+      const accounts = await ethereum.request({ method: "eth_accounts" });
+      onTrace?.({
+        step: "eth_accounts",
+        attempt: 0,
+        elapsedMs: Date.now() - t0,
+        ...describeResult(accounts),
+      });
+      const addr = extractFirstAddress(accounts);
+      if (addr) return addr;
+    } catch (e) {
+      onTrace?.({
+        step: "eth_accounts",
+        attempt: 0,
+        elapsedMs: Date.now() - t0,
+        resultKind: "throw",
+        errMessage: (e as Error).message,
+      });
+      // continue to step 3
+    }
+  }
+
+  // STEP 3: eth_requestAccounts. The only call that pops a connect dialog.
+  // Retry on [] because some MiniPay builds hydrate the wallet session a
+  // short while after the WebView loads (250-750 ms typically).
+  if (typeof ethereum.request !== "function") return null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const start = Date.now();
     try {
       const accounts = await ethereum.request({ method: "eth_requestAccounts" });
       const elapsed = Date.now() - start;
-      const { resultKind, resultLen } = describeResult(accounts);
       onTrace?.({
+        step: "eth_requestAccounts",
         attempt,
         elapsedMs: elapsed,
-        resultKind,
-        resultLen,
-        selectedAddress: ethereum.selectedAddress,
-        enableExists: typeof ethereum.enable === "function",
+        ...describeResult(accounts),
       });
-      if (Array.isArray(accounts) && accounts.length > 0) {
-        return accounts[0] as string;
-      }
+      const addr = extractFirstAddress(accounts);
+      if (addr) return addr;
       if (attempt < retries) {
         await sleep(delayMs);
         continue;
       }
       return null;
     } catch (e) {
-      const elapsed = Date.now() - start;
       onTrace?.({
+        step: "eth_requestAccounts",
         attempt,
-        elapsedMs: elapsed,
+        elapsedMs: Date.now() - start,
         resultKind: "throw",
         errMessage: (e as Error).message,
-        selectedAddress: ethereum.selectedAddress,
-        enableExists: typeof ethereum.enable === "function",
       });
       return null;
     }
