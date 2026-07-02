@@ -10,7 +10,14 @@ Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos
 - Estado del DAG: `openspec/changes/hexarena-mvp/state.yaml` — siempre revisar ahí antes de asumir qué fase sigue.
 - Progreso de implementación detallado: Engram, topic_key `sdd/hexarena-mvp/apply-progress`.
 
-**Al día de hoy (2026-07-02)**: PR1-PR4 de 5 completados (bootstrap, motor de juego, backend, contrato, frontend). Falta **PR5**: integración e2e real (conectar `apps/web` ↔ `apps/server` corriendo, conectar `settleOnChain()` al contrato desplegado) + checklist de salida a Proof of Ship (deploy a Mainnet, repo público, hosting, registro en talent.app). PR5 requiere decisiones del usuario (claves de deploy, dónde hostear) antes de arrancar.
+**Al día de hoy (2026-07-02)**: PR1-PR5 de 5 completados. Todo deployado y en producción:
+- Repo público: https://github.com/opitradingacademy/hexarena (rama `main`). Push requiere `bash scripts/push-with-token.sh main` (token en `.github-token`, gitignored — no hay credenciales persistentes en `git config`).
+- `apps/server` en Railway: https://hexarenaserver-production.up.railway.app
+- `apps/web` en Vercel: https://web-taupe-alpha-23.vercel.app (deployado vía CLI con `vercel --prod`, config en `vercel.json` de la raíz para que Vercel entienda el monorepo pnpm — root del proyecto Vercel es la raíz del repo, no `apps/web`, porque necesita ver el lockfile completo).
+- `ArenaSettlement.sol` en Celo Mainnet: `0x108E012C3B12421f216cA5C2C59770c34653e1d0`, verificado en Celoscan (https://celoscan.io/address/0x108e012c3b12421f216ca5c2c59770c34653e1d0). Token de settlement: USDT real (`0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`, NO la dirección de fee-abstraction de MiniPay).
+- Integración e2e real (Casual + Arena) probada con dos clientes de socket reales, 104/104 tests Vitest.
+
+**Único pendiente real**: `openspec/changes/hexarena-mvp/tasks.md` → sección "Known Issues" — el balance de USDT en el Dashboard muestra $0.00 en el dispositivo físico de MiniPay pese a múltiples fixes reales confirmados (ver historial de debugging ahí). No asumir que está resuelto sin retest en dispositivo. Registro en talent.app (5.6) sigue pendiente, es acción manual del usuario.
 
 ## Alcance del MVP
 
@@ -40,7 +47,7 @@ Test runner: Vitest (raíz del monorepo) + Foundry para contratos. Strict TDD Mo
 - Nunca "crypto"/"crypto token" → "stablecoin" / "dólar digital".
 - Nunca mostrar CELO ni direcciones `0x` como identificador principal — balances siempre en USD.
 - Solo USDT/USDC/USDm en scope de la Mini App.
-- Bundle JS de `apps/web` debe pesar <2MB — hay un gate (`check:bundle-size`) que lo mide contra un build real. Al cierre de PR4: 0.77MB.
+- Bundle JS de `apps/web` debe pesar <2MB — hay un gate (`check:bundle-size`) que lo mide contra un build real. Al cierre de PR5: 1.09MB (subió con viem + Tailwind, sigue bien debajo del budget).
 - Direcciones de fee currency en Mainnet (no inventar otras): USDm `0x765DE816845861e75A25fCA122bb6898B8B1282a` (default MiniPay), USDC adapter `0x2F25deB3848C207fc8E0c34035B3Ba7fC157602B`, USDT adapter `0x0e2a3e05bc9a16f5292a6170456a710cb89c6f72`.
 - MiniPay solo soporta transacciones legacy (no `maxFeePerGas`/`maxPriorityFeePerGas`).
 

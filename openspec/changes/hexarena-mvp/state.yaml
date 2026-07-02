@@ -21,11 +21,14 @@ phases:
     completed_prs:
       - PR1: bootstrap + packages/shared (Phase 0-1, 14/14 tasks)
       - PR2: apps/server ledger + Socket.IO (Phase 2, 14/14 tasks)
-      - PR3: packages/contracts ArenaSettlement.sol (Phase 3, 7/8 tasks — 3.7 deployed to Celo Mainnet at 0x108E012C3B12421f216cA5C2C59770c34653e1d0, not yet verified on Celoscan; 3.8 real settleOnChain wiring still deferred)
+      - PR3: packages/contracts ArenaSettlement.sol (Phase 3, 8/8 tasks — 3.7 deployed to Celo Mainnet at 0x108E012C3B12421f216cA5C2C59770c34653e1d0, verified on Celoscan; 3.8 real settleOnChain wiring done in PR5/5.2)
       - PR4: apps/web MiniPay client (Phase 4, 8/8 tasks)
+      - PR5: e2e integration + Proof of Ship shipping (Phase 5 + 5.5, 5.1-5.5 done, 5.6 pending). Repo public: https://github.com/opitradingacademy/hexarena (main). Server live: https://hexarenaserver-production.up.railway.app (Railway). Web live: https://web-taupe-alpha-23.vercel.app (Vercel, deployed via CLI — vercel.json in repo root for pnpm monorepo build, NOT auto-deploy from git push yet). Contract live + verified: 0x108E012C3B12421f216cA5C2C59770c34653e1d0 (Celoscan: https://celoscan.io/address/0x108e012c3b12421f216ca5c2c59770c34653e1d0). Wallet-based identity + real USDT balance reading implemented (5.5.1-5.5.4). Multiple real bugs found via physical-device testing and fixed: socket.io-client auth callback contract, GameState Map serialization, MiniPay window.ethereum async injection timing, dashboard nav wiring, turn-label bug in PlayerClock, Tailwind styling pass.
     pending_prs:
-      - PR5: e2e integration (wire web<->server<->contract) + Proof of Ship shipping checklist (Phase 5, 6 tasks — 5.1 done, 5.2 done, 5.3 done, 5.4 done, 5.5 done, 5.6 pending). Repo public: opitradingacademy/hexarena. server live at https://hexarenaserver-production.up.railway.app (Railway). web live at https://web-taupe-alpha-23.vercel.app (Vercel, deployed via CLI, not auto-deploy from git push yet). Contract live at 0x108E012C3B12421f216cA5C2C59770c34653e1d0 (Celo Mainnet, verified on Celoscan: https://celoscan.io/address/0x108e012c3b12421f216ca5c2c59770c34653e1d0). Remaining: talent.app registration (5.6, manual user action), wallet-auth gap noted by sdd-apply sub-agent (server still uses socket.id/placeholder wallet, not real wallet addresses for Arena payouts — flagged as known limitation, not blocking shipping but should be resolved before real-money launch)
-    test_suite: 77/77 passing (packages/shared + apps/server + apps/web) + 12/12 Foundry tests (packages/contracts)
+      - none — all planned PRs (1-5) applied. Remaining work is the open bug below and the manual talent.app registration (5.6).
+    open_bugs:
+      - "5.5.5: Dashboard USDT balance shows $0.00 on physical MiniPay device despite wallet-read logic matching a proven-working reference app tested on the same device+wallet. Root cause NOT yet found — see tasks.md 'Known Issues' section for full debugging history (waitForEthereum race-condition fix, eth_requestAccounts/eth_accounts/enable() fallback chain, all applied and confirmed still insufficient). Next step needs physical-device remote debugging (USB pairing blocked so far) or comparing full page-load/script-execution order against the reference app."
+    test_suite: 104/104 Vitest passing (packages/shared + apps/server + apps/web) + 12/12 Foundry tests (packages/contracts)
   verify:
     status: pending
   archive:
