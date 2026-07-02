@@ -1,8 +1,6 @@
 /**
- * Chain types/ABI placeholder for ArenaSettlement (Celo). Full ABI + verified
- * Mainnet address are published here once a REAL on-chain deploy runs
- * (Phase 5 — PR3 only wrote the contract, tests, and deploy script; no
- * transaction was broadcast). See design.md D1 (funding & access control)
+ * Chain types/ABI for ArenaSettlement (Celo). `ArenaSettlement` is deployed
+ * to Celo Mainnet as of PR5 — see design.md D1 (funding & access control)
  * and Folder Structure.
  */
 
@@ -13,10 +11,28 @@ export type ChainId = 42220 | 11142220;
 
 export type VerifiedAsset = "USDm" | "USDC" | "USDT";
 
-/** Populated post-deploy (PR3/PR5). Empty placeholder for PR1. */
-export const ARENA_SETTLEMENT_ADDRESS: Partial<Record<ChainId, `0x${string}`>> = {};
+export const ARENA_SETTLEMENT_ADDRESS: Partial<Record<ChainId, `0x${string}`>> = {
+  42220: "0x108E012C3B12421f216cA5C2C59770c34653e1d0",
+};
 
-/** Populated post-deploy with the compiled contract ABI. Empty placeholder for PR1. */
-export const ARENA_SETTLEMENT_ABI: readonly unknown[] = [];
+/** Settlement token (USDT) on Celo Mainnet — matches ArenaSettlement's constructor arg. */
+export const SETTLEMENT_TOKEN_ADDRESS: Partial<Record<ChainId, `0x${string}`>> = {
+  42220: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+};
+
+/** `settle(bytes32 matchId, address winner, uint256 amount)` — the only ABI fragment apps/server calls. */
+export const ARENA_SETTLEMENT_ABI = [
+  {
+    type: "function",
+    name: "settle",
+    inputs: [
+      { name: "matchId", type: "bytes32", internalType: "bytes32" },
+      { name: "winner", type: "address", internalType: "address" },
+      { name: "amount", type: "uint256", internalType: "uint256" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+] as const;
 
 export const SUPPORTED_ASSETS: readonly VerifiedAsset[] = ["USDm", "USDC", "USDT"];

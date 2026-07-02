@@ -3,7 +3,7 @@
  * Server is sole authority: client sends intent, server validates and broadcasts state.
  */
 
-import type { Axial, GameState, PlayerId } from "../domain/board";
+import type { Axial, PlayerId, SerializedGameState } from "../domain/board";
 
 export type GameMode = "CASUAL" | "ARENA";
 
@@ -52,7 +52,8 @@ export type MatchFoundPayload = {
   matchId: MatchId;
   opponent: string;
   color: PlayerId;
-  initialState: GameState;
+  /** JSON-safe wire form — reconstruct with `deserializeGameState` from `@hexarena/shared/domain/board`. */
+  initialState: SerializedGameState;
   clocks: Record<PlayerId, number>;
 };
 
@@ -61,7 +62,8 @@ export type MoveResultPayload = {
   by: PlayerId;
   at: Axial;
   captures: Axial[];
-  nextState: GameState;
+  /** JSON-safe wire form — reconstruct with `deserializeGameState` from `@hexarena/shared/domain/board`. */
+  nextState: SerializedGameState;
   clocks: Record<PlayerId, number>;
 };
 

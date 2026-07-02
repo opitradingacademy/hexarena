@@ -11,6 +11,7 @@ import {
   checkEnd,
   createGame,
   otherPlayer,
+  serializeGameState,
   type GameState,
   type PlayerId,
 } from "@hexarena/shared/domain/board";
@@ -133,7 +134,7 @@ export class MatchSession {
       by: player,
       at,
       captures: result.captures,
-      nextState: this.state,
+      nextState: serializeGameState(this.state),
       clocks: this.state.clocks,
     };
     this.emit("*", "move_result", payload);
@@ -191,8 +192,15 @@ export class MatchSession {
         const { payout } = settleDecisive(this.store, this.matchId, winnerId, loserId, this.stake, this.stake);
         payload.arena = { prizeUSD: payout, settleTxPending: true };
         // Fire-and-forget: game_over must not block on chain confirmation
-        // (spec "Arena game over pending settlement"). Real signer in PR3.
-        void settleOnChain(this.matchId, winnerId, payout);
+        // (spec "Arena game over pending settlement").
+        // NOTE: `walletAddress` is a `wallet:${userId}` placeholder until
+        // real wallet-auth middleware lands (see server.ts userIdFor) — the
+        // on-chain settle() call is wired for real but will only resolve a
+        // genuine winner address once auth is real. Out of scope for PR5.
+        const winnerAddress = this.store.getUser(winnerId)?.walletAddress ?? winnerId;
+        settleOnChain(this.matchId, winnerAddress, payout).catch((err) => {
+          console.error(`[settleOnChain] matchId=${this.matchId} failed:`, err);
+        });
       } else {
         settleDraw(this.store, this.matchId, this.players.P1, this.players.P2, this.stake, this.stake);
         payload.arena = { prizeUSD: this.stake * 0.8, settleTxPending: false };

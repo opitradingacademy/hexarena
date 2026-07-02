@@ -80,8 +80,8 @@ Chain strategy: pending
 - [x] 4.8 Add bundle-analyzer gate, verify <2MB — spec "Bundle Size Budget". (`@next/bundle-analyzer` wired in `next.config.mjs` (`ANALYZE=true` script) + `bin/check-bundle-size.ts` hard gate; measured this session: **0.77MB / 2MB budget** after `next build`.)
 
 ## Phase 5: Integration & Shipping
-- [ ] 5.1 E2E test: full Casual match (queue → moves → game_over) via Socket.IO test client.
-- [ ] 5.2 E2E test: full Arena flow (simulated deposit → match → house rake payout → testnet `settle()`).
+- [x] 5.1 E2E test: full Casual match (queue → moves → game_over) via Socket.IO test client. (`apps/server/e2e.casual.test.ts` — real HTTP server + 2 real socket.io-client connections, `legalMoves()` picks a real capturing move. Also wired `apps/web`'s matchmaking/game/history screens to a real `socketClient` singleton — `lib/socketSingleton.ts`, `lib/serverUrl.ts` (`NEXT_PUBLIC_SERVER_URL`, fallback `localhost:3001`). Found and fixed a real bug: `GameState.board` is a `Map`, which `JSON.stringify`s to `{}` over Socket.IO — added `serializeGameState`/`deserializeGameState` to `packages/shared/domain/board.ts` and wired both `match_found.initialState` and `move_result.nextState` through it.)
+- [x] 5.2 E2E test: full Arena flow (simulated deposit → match → house rake payout → real `settle()`). (`apps/server/e2e.arena.test.ts` — real socket flow, `settleOnChain` mocked at module boundary to assert call args without spending real gas. Replaced the `chain/settlement.ts` stub with a real viem `writeContract` call against the deployed `ArenaSettlement` (Celo Mainnet `0x108E012C3B12421f216cA5C2C59770c34653e1d0`, settlement token USDT `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`) — signer from `OPERATOR_PRIVATE_KEY` env, RPC from `CELO_MAINNET_RPC_URL` (fallback `forno.celo.org`). Filled in `packages/shared/chain/index.ts` placeholders with the real address + minimal ABI fragment for `settle()`.)
 - [ ] 5.3 Deploy `ArenaSettlement` to Celo **Mainnet**, verify contract (Proof of Ship requirement).
 - [ ] 5.4 Publish public GitHub repo with commit history.
 - [ ] 5.5 Deploy live hosted `apps/web` + `apps/server`.

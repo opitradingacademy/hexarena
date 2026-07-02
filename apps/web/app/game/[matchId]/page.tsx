@@ -1,28 +1,89 @@
 "use client";
 
-import { useState } from "react";
-import { createGame, type Axial } from "@hexarena/shared/domain/board";
+import { useEffect, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { createGame, deserializeGameState, type Axial, type GameState, type PlayerId } from "@hexarena/shared/domain/board";
+import type { GameOverPayload } from "@hexarena/shared/protocol";
 import { HexBoard } from "../../../components/HexBoard";
 import { PlayerClock } from "../../../components/PlayerClock";
+import { ResultBanner } from "../../../components/ResultBanner";
+import { getSocket } from "../../../lib/socketSingleton";
 
 /**
  * In-game board screen (design.md wireframe "3. In-Game Board").
- * Uses the pure domain engine (packages/shared) for local rendering; the
- * server-authoritative move flow over Socket.IO connects in PR5 e2e.
+ * Server-authoritative: renders whatever `GameState` the server last
+ * broadcast, and only sends move intent — never applies moves locally.
  */
 export default function GamePage() {
-  const [state] = useState(createGame());
+  const params = useParams<{ matchId: string }>();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const matchId = params.matchId;
+  const selfColor = (searchParams.get("color") as PlayerId | null) ?? "P1";
 
-  function handleCellClick(_at: Axial) {
-    // make_move({ matchId, at }) wired against a live server connection in PR5.
+  const [state, setState] = useState<GameState>(createGame());
+  const [gameOver, setGameOver] = useState<GameOverPayload | null>(null);
+
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket.connected) socket.connect();
+
+    function onMoveResult(payload: { nextState: Parameters<typeof deserializeGameState>[0] }) {
+      setState(deserializeGameState(payload.nextState));
+    }
+    function onGameOver(payload: GameOverPayload) {
+      setGameOver(payload);
+    }
+
+    socket.on("move_result", onMoveResult);
+    socket.on("game_over", onGameOver);
+    socket.emit("resume", { matchId });
+
+    return () => {
+      socket.off("move_result", onMoveResult);
+      socket.off("game_over", onGameOver);
+    };
+  }, [matchId]);
+
+  function handleCellClick(at: Axial) {
+    getSocket().emit("make_move", { matchId, at });
   }
 
+  function handleResign() {
+    getSocket().emit("resign", { matchId });
+  }
+
+  if (gameOver) {
+    return (
+      <main className="mx-auto flex max-w-md flex-col px-4 pt-6">
+        <ResultBanner result={gameOver} selfPlayer={selfColor} />
+        <button
+          type="button"
+          onClick={() => router.push("/matchmaking")}
+          className="mt-4 w-full rounded-xl bg-arena-magenta py-3 text-sm font-bold uppercase text-white shadow-neonMagenta"
+        >
+          Rematch
+        </button>
+      </main>
+    );
+  }
+
+  const opponentColor: PlayerId = selfColor === "P1" ? "P2" : "P1";
+
   return (
-    <main>
-      <PlayerClock label="Opponent" remainingMs={state.clocks.P2} isTurn={state.turn === "P2"} />
-      <HexBoard state={state} onCellClick={handleCellClick} />
-      <PlayerClock label="You" remainingMs={state.clocks.P1} isTurn={state.turn === "P1"} />
-      <button type="button">Resign</button>
+    <main className="mx-auto flex max-w-md flex-col gap-4 px-4 pt-6">
+      <PlayerClock label="Opponent" remainingMs={state.clocks[opponentColor]} isTurn={state.turn === opponentColor} />
+      <div className="overflow-x-auto py-2">
+        <HexBoard state={state} onCellClick={handleCellClick} />
+      </div>
+      <PlayerClock label="You" remainingMs={state.clocks[selfColor]} isTurn={state.turn === selfColor} />
+      <button
+        type="button"
+        onClick={handleResign}
+        className="mt-2 w-full rounded-xl border border-arena-border py-2 text-sm font-bold uppercase text-slate-400"
+      >
+        Resign
+      </button>
     </main>
   );
 }

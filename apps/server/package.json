@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@hexarena/shared": "workspace:*",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "viem": "^2"
   },
   "devDependencies": {
     "socket.io-client": "^4.7.5",

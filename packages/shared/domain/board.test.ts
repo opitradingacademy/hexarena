@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createGame, cellKey, ALL_CELLS } from "./board";
+import { createGame, cellKey, ALL_CELLS, serializeGameState, deserializeGameState } from "./board";
 
 describe("createGame", () => {
   it("creates a radius-4 hex board with 61 cells", () => {
@@ -31,5 +31,23 @@ describe("createGame", () => {
     const state = createGame();
     expect(state.clocks.P1).toBeGreaterThan(0);
     expect(state.clocks.P2).toBeGreaterThan(0);
+  });
+});
+
+describe("GameState wire (de)serialization — Socket.IO JSON boundary", () => {
+  it("round-trips board through JSON without losing entries (Map is not JSON-serializable)", () => {
+    const state = createGame();
+    const wire = serializeGameState(state);
+    const json = JSON.parse(JSON.stringify(wire));
+    const restored = deserializeGameState(json);
+
+    expect(restored.board.size).toBe(state.board.size);
+    for (const [key, value] of state.board) {
+      expect(restored.board.get(key)).toBe(value);
+    }
+    expect(restored.turn).toBe(state.turn);
+    expect(restored.clocks).toEqual(state.clocks);
+    expect(restored.status).toBe(state.status);
+    expect(restored.consecutivePasses).toBe(state.consecutivePasses);
   });
 });

@@ -9,3 +9,5 @@ coverage/
 out/
 tools/*.exe
 .github-token
+
+.vercel

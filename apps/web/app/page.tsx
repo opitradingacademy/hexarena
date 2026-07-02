@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 import { WalletWidget } from "../components/WalletWidget";
 import { ModeCard } from "../components/ModeCard";
@@ -18,29 +17,29 @@ export default function DashboardPage() {
   const [recentMatches] = useState<HistoryEntry[]>([]);
 
   return (
-    <main>
-      <nav>
-        <span>HexArena</span>
+    <main className="mx-auto max-w-md px-4 pt-6">
+      <nav className="flex items-center justify-between">
+        <span className="text-lg font-black uppercase tracking-widest text-arena-cyan">HexArena</span>
         <WalletWidget balanceUSD={balanceUSD} />
       </nav>
 
-      {!isMiniPay && <p role="note">Open this app inside MiniPay for the best experience.</p>}
+      {!isMiniPay && (
+        <p role="note" className="mt-4 rounded-xl border border-arena-gold/40 bg-arena-gold/10 px-4 py-2 text-sm text-arena-gold">
+          Open this app inside MiniPay for the best experience.
+        </p>
+      )}
 
-      <section>
+      <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <ModeCard mode="CASUAL" balanceUSD={balanceUSD} />
         <ModeCard mode="ARENA" balanceUSD={balanceUSD} />
       </section>
 
-      <section>
-        <h3>Recent matches</h3>
-        <HistoryList entries={recentMatches} />
+      <section className="mt-8">
+        <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">Recent matches</h3>
+        <div className="mt-3">
+          <HistoryList entries={recentMatches} />
+        </div>
       </section>
-
-      <nav>
-        <Link href="/">Home</Link>
-        <Link href="/matchmaking">Play</Link>
-        <Link href="/history">History</Link>
-      </nav>
     </main>
   );
 }

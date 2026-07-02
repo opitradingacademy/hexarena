@@ -73,6 +73,21 @@ export function otherPlayer(p: PlayerId): PlayerId {
   return p === "P1" ? "P2" : "P1";
 }
 
+/** JSON-safe wire form of `GameState` — `Map` does not survive `JSON.stringify` (serializes to `{}`). */
+export type SerializedGameState = Omit<GameState, "board"> & {
+  board: [string, PlayerId | null][];
+};
+
+/** Use before emitting `GameState` over Socket.IO. */
+export function serializeGameState(state: GameState): SerializedGameState {
+  return { ...state, board: [...state.board.entries()] };
+}
+
+/** Use after receiving a wire-form `GameState` from Socket.IO. */
+export function deserializeGameState(wire: SerializedGameState): GameState {
+  return { ...wire, board: new Map(wire.board) };
+}
+
 export function createGame(_seed?: string): GameState {
   const board = new Map<string, PlayerId | null>();
   for (const cell of ALL_CELLS) {

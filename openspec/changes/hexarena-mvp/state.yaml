@@ -21,10 +21,10 @@ phases:
     completed_prs:
       - PR1: bootstrap + packages/shared (Phase 0-1, 14/14 tasks)
       - PR2: apps/server ledger + Socket.IO (Phase 2, 14/14 tasks)
-      - PR3: packages/contracts ArenaSettlement.sol (Phase 3, 6/8 tasks — 3.7 deploy script written but not executed, 3.8 real settleOnChain wiring deferred)
+      - PR3: packages/contracts ArenaSettlement.sol (Phase 3, 7/8 tasks — 3.7 deployed to Celo Mainnet at 0x108E012C3B12421f216cA5C2C59770c34653e1d0, not yet verified on Celoscan; 3.8 real settleOnChain wiring still deferred)
       - PR4: apps/web MiniPay client (Phase 4, 8/8 tasks)
     pending_prs:
-      - PR5: e2e integration (wire web<->server<->contract) + Proof of Ship shipping checklist (Phase 5, 6 tasks) — needs user decisions (deploy keys, hosting) before starting
+      - PR5: e2e integration (wire web<->server<->contract) + Proof of Ship shipping checklist (Phase 5, 6 tasks — 5.1 done, 5.2 done, 5.3 done, 5.4 done, 5.5 done, 5.6 pending). Repo public: opitradingacademy/hexarena. server live at https://hexarenaserver-production.up.railway.app (Railway). web live at https://web-taupe-alpha-23.vercel.app (Vercel, deployed via CLI, not auto-deploy from git push yet). Contract live at 0x108E012C3B12421f216cA5C2C59770c34653e1d0 (Celo Mainnet, verified on Celoscan: https://celoscan.io/address/0x108e012c3b12421f216ca5c2c59770c34653e1d0). Remaining: talent.app registration (5.6, manual user action), wallet-auth gap noted by sdd-apply sub-agent (server still uses socket.id/placeholder wallet, not real wallet addresses for Arena payouts — flagged as known limitation, not blocking shipping but should be resolved before real-money launch)
     test_suite: 77/77 passing (packages/shared + apps/server + apps/web) + 12/12 Foundry tests (packages/contracts)
   verify:
     status: pending

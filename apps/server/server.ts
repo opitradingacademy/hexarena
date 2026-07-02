@@ -10,7 +10,7 @@ import type {
   ClientToServerEvents,
   ServerToClientEvents,
 } from "@hexarena/shared/protocol";
-import type { PlayerId } from "@hexarena/shared/domain/board";
+import { serializeGameState, type PlayerId } from "@hexarena/shared/domain/board";
 import type { LedgerStore, UserId } from "./ledger/types";
 import { balanceOf } from "./ledger/ledger";
 import { Matchmaker, type QueueEntry } from "./matchmaking";
@@ -104,7 +104,7 @@ export function createServer(httpServer: HttpServer, store: LedgerStore) {
           matchId,
           opponent: p === a ? b.userId : a.userId,
           color,
-          initialState: session.state,
+          initialState: serializeGameState(session.state),
           clocks: session.state.clocks,
         });
       }
