@@ -1,0 +1,6 @@
+{
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm --filter @hexarena/web build",
+  "outputDirectory": "apps/web/.next",
+  "framework": "nextjs"
+}
