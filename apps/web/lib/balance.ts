@@ -1,41 +1,32 @@
-import { createPublicClient, http, type Address } from "viem";
-import { celo } from "viem/chains";
 import { SETTLEMENT_TOKEN_ADDRESS } from "@hexarena/shared/chain";
 
-type CeloPublicClient = ReturnType<typeof createPublicClient<ReturnType<typeof http>, typeof celo>>;
+type EthereumRequestFn = (args: { method: string; params?: unknown[] }) => Promise<unknown>;
 
-const USDT_ADDRESS = SETTLEMENT_TOKEN_ADDRESS[42220] as Address;
-
-const ERC20_BALANCE_OF_ABI = [
-  {
-    type: "function",
-    name: "balanceOf",
-    inputs: [{ name: "account", type: "address" }],
-    outputs: [{ name: "", type: "uint256" }],
-    stateMutability: "view",
-  },
-] as const;
-
-export function getCeloPublicClient(): CeloPublicClient {
-  const rpcUrl = process.env.NEXT_PUBLIC_CELO_RPC_URL ?? "https://forno.celo.org";
-  return createPublicClient({ chain: celo, transport: http(rpcUrl) });
-}
+type EthereumProviderLike = { request: EthereumRequestFn };
 
 /**
- * Reads the USDT balance for a wallet on Celo Mainnet and converts it from
- * 6-decimal on-chain units to a plain USD number. Returns null when there
- * is no wallet address (Dashboard shows $0.00 in that case).
+ * EIP-1193 provider used as the read transport for USDT balanceOf.
+ * On physical MiniPay, `forno.celo.org` (the public RPC) is blocked by
+ * the WebView's CORS policy — only the WebView's internal RPC, exposed
+ * via the injected provider, reaches the chain reliably. The previously-
+ * working reference Mini App does the same thing (raw eth_call, no viem,
+ * no `forno`). See docs.minipay.xyz → Retrieve Balance.
  */
 export async function getUsdtBalance(
   walletAddress: string | null,
-  client: Pick<CeloPublicClient, "readContract">,
+  provider: EthereumProviderLike,
 ): Promise<number | null> {
   if (!walletAddress) return null;
-  const raw = (await client.readContract({
-    address: USDT_ADDRESS,
-    abi: ERC20_BALANCE_OF_ABI,
-    functionName: "balanceOf",
-    args: [walletAddress as Address],
-  })) as bigint;
-  return Number(raw) / 1e6;
+
+  // balanceOf(address) -> uint256 selector + 32-byte left-padded address.
+  const selector = "0x70a08231";
+  const data =
+    selector + "000000000000000000000000" + walletAddress.toLowerCase().replace(/^0x/, "");
+
+  const raw = (await provider.request({
+    method: "eth_call",
+    params: [{ to: SETTLEMENT_TOKEN_ADDRESS[42220], data }, "latest"],
+  })) as string;
+
+  return Number(BigInt(raw)) / 1e6;
 }

@@ -8,7 +8,7 @@ import { HistoryList, type HistoryEntry } from "../components/HistoryList";
 import { DiagPanel } from "../components/DiagPanel";
 import { useIsMiniPay } from "../lib/useIsMiniPay";
 import { getWalletAddress } from "../lib/wallet";
-import { getCeloPublicClient, getUsdtBalance } from "../lib/balance";
+import { getUsdtBalance } from "../lib/balance";
 import { waitForEthereum } from "../lib/waitForEthereum";
 import { createDiagLog, type DiagEntry } from "../lib/diag";
 
@@ -73,7 +73,15 @@ export default function DashboardPage() {
 
       let balance: number | null = null;
       try {
-        balance = await getUsdtBalance(walletAddress, getCeloPublicClient());
+        // Route the read through the injected provider (same as the
+        // proven-working reference Mini App): forno.celo.org is blocked
+        // by the MiniPay WebView's CORS policy, only the WebView's own
+        // RPC over the injected provider reaches the chain reliably.
+        if (ethereum?.request) {
+          const requestFn: (args: { method: string; params?: unknown[] }) => Promise<unknown> =
+            ethereum.request.bind(ethereum);
+          balance = await getUsdtBalance(walletAddress, { request: requestFn });
+        }
       } catch (e) {
         log("C.balanceError", { message: (e as Error).message });
       }
