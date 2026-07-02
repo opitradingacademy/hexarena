@@ -8,6 +8,7 @@ import { HistoryList, type HistoryEntry } from "../components/HistoryList";
 import { useIsMiniPay } from "../lib/useIsMiniPay";
 import { getWalletAddress } from "../lib/wallet";
 import { getCeloPublicClient, getUsdtBalance } from "../lib/balance";
+import { waitForEthereum } from "../lib/waitForEthereum";
 
 /**
  * Dashboard screen (design.md wireframe "1. Dashboard").
@@ -25,6 +26,10 @@ export default function DashboardPage() {
     let cancelled = false;
 
     async function loadBalance() {
+      // MiniPay injects window.ethereum asynchronously — wait for it (or the
+      // 3s timeout) before reading it, otherwise this can race the
+      // injection and see no provider / no accounts.
+      await waitForEthereum();
       const ethereum = window.ethereum;
       const walletAddress =
         ethereum && typeof ethereum.request === "function"
