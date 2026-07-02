@@ -1,25 +1,14 @@
-import { createWalletClient, custom } from "viem";
-import { celo } from "viem/chains";
-
 /**
  * Reads the connected wallet address from an EIP-1193 injected provider
  * (MiniPay, or any browser wallet, for testing outside MiniPay).
  *
- * Tries three paths, in order:
- *  1. Silent `eth_accounts` (via viem's `getAddresses()`) — already
- *     authorized accounts, no prompt. Documented MiniPay pattern
- *     (celopedia-skill minipay-guide.md "Wallet Connection").
- *  2. `eth_requestAccounts` via `.request()` — the standard EIP-1193
- *     prompting call.
- *  3. Legacy `ethereum.enable()` — pre-EIP-1193 API. Confirmed by device
- *     testing that MiniPay's injected provider (at least inside its
- *     Developer Mode "Load Test Page" preview) answers `enable()`
- *     correctly while both `.request()`-based calls above silently return
- *     no accounts. `enable()` is deprecated for general dapps but MiniPay
- *     still implements it, so it is kept as the deciding fallback rather
- *     than the primary path (the `.request()` paths are still correct
- *     per spec and expected to work for a Mini App loaded normally, e.g.
- *     once listed, rather than through the raw test-page loader).
+ * Ported directly from a reference Mini App confirmed working on a
+ * physical MiniPay device (same wallet, same $3.91 USDT balance verified
+ * on-screen in both apps): a single raw `eth_requestAccounts` call via
+ * `.request()`, nothing else. Earlier attempts at this file layered viem's
+ * `getAddresses()` (eth_accounts) and a legacy `enable()` fallback on top
+ * of each other and were still intermittent — the proven-working
+ * reference does none of that, just this one call.
  */
 export type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -30,34 +19,13 @@ export async function getWalletAddress(
   ethereum: EthereumProvider | undefined,
 ): Promise<string | null> {
   if (!ethereum) return null;
-
   try {
-    const client = createWalletClient({ chain: celo, transport: custom(ethereum) });
-    const accounts = await client.getAddresses();
-    if (accounts[0]) return accounts[0];
-  } catch {
-    // fall through
-  }
-
-  try {
-    const requested = await ethereum.request({ method: "eth_requestAccounts" });
-    if (Array.isArray(requested) && requested.length > 0) {
-      return requested[0] as string;
+    const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+    if (Array.isArray(accounts) && accounts.length > 0) {
+      return accounts[0] as string;
     }
+    return null;
   } catch {
-    // fall through
+    return null;
   }
-
-  if (typeof ethereum.enable === "function") {
-    try {
-      const enabled = await ethereum.enable();
-      if (Array.isArray(enabled) && enabled.length > 0) {
-        return enabled[0] as string;
-      }
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
 }
