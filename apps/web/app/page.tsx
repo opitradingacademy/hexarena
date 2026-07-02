@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import { WalletWidget } from "../components/WalletWidget";
 import { ModeCard } from "../components/ModeCard";
 import { HistoryList, type HistoryEntry } from "../components/HistoryList";
+import { DiagPanel } from "../components/DiagPanel";
 import { useIsMiniPay } from "../lib/useIsMiniPay";
 import { getWalletAddress } from "../lib/wallet";
 import { getCeloPublicClient, getUsdtBalance } from "../lib/balance";
 import { waitForEthereum } from "../lib/waitForEthereum";
+import { createDiagLog, type DiagEntry } from "../lib/diag";
 
 /**
  * Dashboard screen (design.md wireframe "1. Dashboard").
@@ -21,28 +23,30 @@ export default function DashboardPage() {
   const [balanceUSD, setBalanceUSD] = useState(0);
   const [balanceLoading, setBalanceLoading] = useState(true);
   const [recentMatches] = useState<HistoryEntry[]>([]);
+  const [diagEntries, setDiagEntries] = useState<DiagEntry[]>([]);
 
   useEffect(() => {
     let cancelled = false;
+    const { entries, log } = createDiagLog();
+    const publish = () => {
+      if (!cancelled) setDiagEntries([...entries]);
+    };
 
     async function loadBalance() {
-      const diag = (label: string, payload?: unknown) =>
-        // Prefixed for easy grep in minipay-debug logs.
-        console.log("[HexArena:diag]", label, payload ?? "");
-
-      diag("A.isMiniPay", { isMiniPay });
+      log("A.isMiniPay", { isMiniPay });
 
       // MiniPay injects window.ethereum asynchronously — wait for it (or the
       // 3s timeout) before reading it, otherwise this can race the
       // injection and see no provider / no accounts.
       const waited = await waitForEthereum();
       const ethereum = window.ethereum;
-      diag("B.windowEthereum", {
+      log("B.windowEthereum", {
         waited,
         present: !!ethereum,
         isMiniPayFlag: ethereum?.isMiniPay,
         hasRequest: typeof ethereum?.request === "function",
       });
+      publish();
 
       let walletAddress: string | null = null;
       try {
@@ -54,17 +58,19 @@ export default function DashboardPage() {
               })
             : null;
       } catch (e) {
-        diag("B.walletError", { message: (e as Error).message });
+        log("B.walletError", { message: (e as Error).message });
       }
-      diag("B.walletAddress", { walletAddress });
+      log("B.walletAddress", { walletAddress });
+      publish();
 
       let balance: number | null = null;
       try {
         balance = await getUsdtBalance(walletAddress, getCeloPublicClient());
       } catch (e) {
-        diag("C.balanceError", { message: (e as Error).message });
+        log("C.balanceError", { message: (e as Error).message });
       }
-      diag("C.balance", { balance });
+      log("C.balance", { balance });
+      publish();
 
       if (!cancelled) {
         setBalanceUSD(balance ?? 0);
@@ -73,7 +79,8 @@ export default function DashboardPage() {
     }
 
     loadBalance().catch((e) => {
-      console.log("[HexArena:diag] loadBalance.catch", (e as Error).message);
+      log("loadBalance.catch", { message: (e as Error).message });
+      publish();
       if (!cancelled) setBalanceLoading(false);
     });
 
@@ -119,6 +126,8 @@ export default function DashboardPage() {
           <HistoryList entries={recentMatches} />
         </div>
       </section>
+
+      <DiagPanel entries={diagEntries} />
     </main>
   );
 }
