@@ -52,19 +52,26 @@ export function encodeUsdtTransfer(args: {
  * EIP-1193 provider. Returns the transaction hash once the user signs
  * and the tx is broadcast.
  *
- * Important MiniPay-specific quirks (these made two deploys' worth of
- * debugging fail before they were added — see git log):
- *   1. `feeCurrency` MUST be the USDT adapter address, NOT the USDT
- *      token address. Without `feeCurrency`, the MiniPay provider calls
+ * Important MiniPay/Celo-specific quirks (each one cost an iteration
+ * during the Arena deposit flow — see git log for the trail):
+ *   1. `feeCurrency` MUST be the USDT adapter address, NOT the token
+ *      address. Without `feeCurrency`, the MiniPay provider calls
  *      `eth_estimateGas`, finds no supported gas token for the chosen
  *      ERC-20, and reverts the simulation with a bare
- *      "execution reverted". The Mini App emits a friendly error,
- *      the user sees nothing happen. Verified against docs.minipay.xyz
+ *      "execution reverted". Verified against docs.minipay.xyz
  *      → technical-references/send-transaction.
- *   2. NO `maxFeePerGas`/`maxPriorityFeePerGas` fields — MiniPay only
- *      supports legacy transactions (type 0). Either field triggers
- *      an "unsupported field" rejection from the provider.
- *   3. We send the token's contract address as `to`, and the encoded
+ *   2. `type: "0x7b"` (CIP-64) MUST be set on Celo transactions that
+ *      use `feeCurrency`. Celo Mainnet rejects Celo's legacy type (0)
+ *      with feeCurrency — and `feeCurrency` is the only way to fund
+ *      gas in USDT for a USDT ERC-20 transfer. Without this field,
+ *      the chain treats the tx as a legacy EIP-1559-less legacy tx and
+ *      feeCurrency is silently ignored, leaving gas unpayable.
+ *      See docs.celo.org → build-on-celo/fee-abstraction/using-fee-abstraction
+ *      → "Prepare the Transaction" → "type: '0x7b'".
+ *   3. NO `maxFeePerGas`/`maxPriorityFeePerGas` fields — type 0x7b
+ *      manages gas differently. Adding them is a no-op for this type
+ *      but `eth_estimateGas` may panic if they're inconsistent.
+ *   4. We send the token's contract address as `to`, and the encoded
  *      `transfer(to, amount)` call data (NOT the user-supplied `to`).
  *      Do not confuse the recipient of the funds (`args.to`) with the
  *      contract the tx targets (`SETTLEMENT_TOKEN_ADDRESS[42220]`).
@@ -96,6 +103,7 @@ export async function submitUsdtTransfer(args: {
     to: tokenAddress,
     data,
     feeCurrency,
+    type: "0x7b", // CIP-64 transaction type — required for feeCurrency on Celo
   } as unknown as Record<string, unknown>;
   const txHash = (await args.ethereum.request({
     method: "eth_sendTransaction",

@@ -25,7 +25,7 @@ describe("encodeUsdtTransfer", () => {
 });
 
 describe("submitUsdtTransfer", () => {
-  it("sends an eth_sendTransaction via the injected provider with feeCurrency", async () => {
+  it("sends an eth_sendTransaction via the injected provider with feeCurrency + CIP-64 type", async () => {
     const txHash = "0x" + "ab".repeat(32);
     const request = vi.fn().mockResolvedValue(txHash);
     const ethereum = { request };
@@ -38,15 +38,18 @@ describe("submitUsdtTransfer", () => {
     expect(result).toBe(txHash);
     const call = request.mock.calls[0]?.[0];
     expect(call.method).toBe("eth_sendTransaction");
-    expect(call.params[0].from).toBe(FROM);
-    expect(call.params[0].to.toLowerCase()).toBe(USDT.toLowerCase());
-    expect(call.params[0].data.startsWith("0xa9059cbb")).toBe(true);
-    // Critical: feeCurrency must be the USDT adapter, NOT the token address
-    // (CIP-64). Otherwise eth_estimateGas in the MiniPay provider-stub
-    // reverts silently with "execution reverted".
-    expect(call.params[0].feeCurrency.toLowerCase()).toBe(
-      "0x0e2a3e05bc9a16f5292a6170456a710cb89c6f72",
-    );
+    const params = call.params[0];
+    expect(params.from).toBe(FROM);
+    expect(params.to.toLowerCase()).toBe(USDT.toLowerCase());
+    expect(params.data.startsWith("0xa9059cbb")).toBe(true);
+    // Critical: feeCurrency must be the USDT adapter (CIP-64). Otherwise
+    // eth_estimateGas in the MiniPay provider-stub reverts with bare
+    // "execution reverted".
+    expect(params.feeCurrency.toLowerCase()).toBe("0x0e2a3e05bc9a16f5292a6170456a710cb89c6f72");
+    // Critical: CIP-64 transaction type 0x7b is required on Celo for any tx
+    // that uses feeCurrency. Without it the chain falls back to legacy
+    // type 0 and silently drops feeCurrency, making gas unpayable.
+    expect(params.type).toBe("0x7b");
   });
 
   it("does NOT include maxFeePerGas / maxPriorityFeePerGas (MiniPay is legacy only)", async () => {
