@@ -23,4 +23,19 @@ describe("createSocketClient", () => {
       expect.objectContaining({ autoConnect: false }),
     );
   });
+
+  it("forwards an auth function so the wallet address is re-evaluated on each connection attempt", () => {
+    const auth = () => ({ walletAddress: "0xabc" });
+    createSocketClient("https://api.hexarena.example", auth);
+    expect(io).toHaveBeenCalledWith(
+      "https://api.hexarena.example",
+      expect.objectContaining({ auth }),
+    );
+  });
+
+  it("omits auth when no auth function is provided", () => {
+    createSocketClient("https://api.hexarena.example");
+    const options = vi.mocked(io).mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(options).not.toHaveProperty("auth");
+  });
 });

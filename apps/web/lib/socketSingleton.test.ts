@@ -14,4 +14,10 @@ describe("getSocket", () => {
     expect(a).toBe(b);
     expect(io).toHaveBeenCalledTimes(1);
   });
+
+  it("passes an auth function to the underlying socket client", () => {
+    getSocket();
+    const options = vi.mocked(io).mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(options.auth).toBeTypeOf("function");
+  });
 });

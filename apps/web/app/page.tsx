@@ -1,28 +1,56 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { WalletWidget } from "../components/WalletWidget";
 import { ModeCard } from "../components/ModeCard";
 import { HistoryList, type HistoryEntry } from "../components/HistoryList";
 import { useIsMiniPay } from "../lib/useIsMiniPay";
+import { getWalletAddress } from "../lib/wallet";
+import { getCeloPublicClient, getUsdtBalance } from "../lib/balance";
 
 /**
  * Dashboard screen (design.md wireframe "1. Dashboard").
- * Structural implementation for PR4 — real balance/history fetching from
- * apps/server wires up in PR5 e2e integration; state here is local/mocked.
+ * Balance is read live from USDT on Celo Mainnet; history fetching from
+ * apps/server still wires up in PR5 e2e integration.
  */
 export default function DashboardPage() {
   const router = useRouter();
   const isMiniPay = useIsMiniPay();
-  const [balanceUSD] = useState(0);
+  const [balanceUSD, setBalanceUSD] = useState(0);
+  const [balanceLoading, setBalanceLoading] = useState(true);
   const [recentMatches] = useState<HistoryEntry[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBalance() {
+      const ethereum = window.ethereum;
+      const walletAddress =
+        ethereum && typeof ethereum.request === "function"
+          ? await getWalletAddress({ request: ethereum.request })
+          : null;
+      const balance = await getUsdtBalance(walletAddress, getCeloPublicClient());
+      if (!cancelled) {
+        setBalanceUSD(balance ?? 0);
+        setBalanceLoading(false);
+      }
+    }
+
+    loadBalance().catch(() => {
+      if (!cancelled) setBalanceLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <main className="mx-auto max-w-md px-4 pt-6">
       <nav className="flex items-center justify-between">
         <span className="text-lg font-black uppercase tracking-widest text-arena-cyan">HexArena</span>
-        <WalletWidget balanceUSD={balanceUSD} />
+        <WalletWidget balanceUSD={balanceUSD} loading={balanceLoading} />
       </nav>
 
       {!isMiniPay && (

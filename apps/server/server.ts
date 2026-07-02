@@ -6,6 +6,7 @@
 import { Server, type Socket } from "socket.io";
 import type { Server as HttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { isAddress } from "viem";
 import type {
   ClientToServerEvents,
   ServerToClientEvents,
@@ -41,9 +42,18 @@ export function createServer(httpServer: HttpServer, store: LedgerStore) {
   const activeMatchByUser = new Map<UserId, string>();
 
   function userIdFor(socket: Socket): UserId {
-    // MVP: socket.id stands in for an authenticated userId until wallet-auth
-    // middleware lands. Ledger users are upserted lazily on first use.
-    return socket.data.userId ?? socket.id;
+    // Wallet-auth (MVP): the client declares its address via
+    // socket.handshake.auth.walletAddress (see apps/web lib/wallet.ts +
+    // lib/socketSingleton.ts). This is NOT cryptographic verification — a
+    // malicious client could claim any address without proving control of
+    // it. Production would need a signed challenge. Falls back to socket.id
+    // when absent/invalid so dev/test clients without a wallet still work.
+    // Ledger users are upserted lazily on first use.
+    const walletAddress = socket.handshake.auth?.walletAddress;
+    if (typeof walletAddress === "string" && isAddress(walletAddress)) {
+      return walletAddress;
+    }
+    return socket.id;
   }
 
   io.on("connection", (socket: Socket) => {
