@@ -1,4 +1,4 @@
-import { SETTLEMENT_TOKEN_ADDRESS } from "@hexarena/shared/chain";
+import { FEE_CURRENCY_ADAPTER, SETTLEMENT_TOKEN_ADDRESS } from "@hexarena/shared/chain";
 
 /**
  * USDC has 6 decimals on Celo. USDm has 18. We default to 6 because the
@@ -52,9 +52,22 @@ export function encodeUsdtTransfer(args: {
  * EIP-1193 provider. Returns the transaction hash once the user signs
  * and the tx is broadcast.
  *
- * Important: do NOT add `maxFeePerGas`/`maxPriorityFeePerGas` here —
- * MiniPay only supports legacy transactions (type 0) and either field
- * causes a "unsupported field" rejection.
+ * Important MiniPay-specific quirks (these made two deploys' worth of
+ * debugging fail before they were added — see git log):
+ *   1. `feeCurrency` MUST be the USDT adapter address, NOT the USDT
+ *      token address. Without `feeCurrency`, the MiniPay provider calls
+ *      `eth_estimateGas`, finds no supported gas token for the chosen
+ *      ERC-20, and reverts the simulation with a bare
+ *      "execution reverted". The Mini App emits a friendly error,
+ *      the user sees nothing happen. Verified against docs.minipay.xyz
+ *      → technical-references/send-transaction.
+ *   2. NO `maxFeePerGas`/`maxPriorityFeePerGas` fields — MiniPay only
+ *      supports legacy transactions (type 0). Either field triggers
+ *      an "unsupported field" rejection from the provider.
+ *   3. We send the token's contract address as `to`, and the encoded
+ *      `transfer(to, amount)` call data (NOT the user-supplied `to`).
+ *      Do not confuse the recipient of the funds (`args.to`) with the
+ *      contract the tx targets (`SETTLEMENT_TOKEN_ADDRESS[42220]`).
  */
 export async function submitUsdtTransfer(args: {
   ethereum: EthereumRequester;
@@ -71,18 +84,22 @@ export async function submitUsdtTransfer(args: {
     decimals: args.decimals,
   });
   const tokenAddress = SETTLEMENT_TOKEN_ADDRESS[42220];
+  const feeCurrency = FEE_CURRENCY_ADAPTER[42220];
   if (!tokenAddress) {
     throw new Error("No settlement token configured for chain 42220 (Celo Mainnet)");
   }
+  if (!feeCurrency) {
+    throw new Error("No fee-currency adapter configured for chain 42220 (Celo Mainnet)");
+  }
+  const txParams = {
+    from: args.from,
+    to: tokenAddress,
+    data,
+    feeCurrency,
+  } as unknown as Record<string, unknown>;
   const txHash = (await args.ethereum.request({
     method: "eth_sendTransaction",
-    params: [
-      {
-        from: args.from,
-        to: tokenAddress,
-        data,
-      },
-    ],
+    params: [txParams],
   })) as `0x${string}`;
   return txHash;
 }

@@ -25,7 +25,7 @@ describe("encodeUsdtTransfer", () => {
 });
 
 describe("submitUsdtTransfer", () => {
-  it("sends an eth_sendTransaction via the injected provider", async () => {
+  it("sends an eth_sendTransaction via the injected provider with feeCurrency", async () => {
     const txHash = "0x" + "ab".repeat(32);
     const request = vi.fn().mockResolvedValue(txHash);
     const ethereum = { request };
@@ -41,6 +41,26 @@ describe("submitUsdtTransfer", () => {
     expect(call.params[0].from).toBe(FROM);
     expect(call.params[0].to.toLowerCase()).toBe(USDT.toLowerCase());
     expect(call.params[0].data.startsWith("0xa9059cbb")).toBe(true);
+    // Critical: feeCurrency must be the USDT adapter, NOT the token address
+    // (CIP-64). Otherwise eth_estimateGas in the MiniPay provider-stub
+    // reverts silently with "execution reverted".
+    expect(call.params[0].feeCurrency.toLowerCase()).toBe(
+      "0x0e2a3e05bc9a16f5292a6170456a710cb89c6f72",
+    );
+  });
+
+  it("does NOT include maxFeePerGas / maxPriorityFeePerGas (MiniPay is legacy only)", async () => {
+    const request = vi.fn().mockResolvedValue("0x" + "ab".repeat(32));
+    await submitUsdtTransfer({
+      ethereum: { request },
+      from: FROM,
+      to: TREASURY,
+      amountUSD: 0.1,
+    });
+    const txParams = request.mock.calls[0][0].params[0];
+    expect(txParams.maxFeePerGas).toBeUndefined();
+    expect(txParams.maxPriorityFeePerGas).toBeUndefined();
+    expect(txParams.gas).toBeUndefined(); // let provider estimate
   });
 
   it("uses explicit raw amount when supplied (skipping USD conversion)", async () => {
