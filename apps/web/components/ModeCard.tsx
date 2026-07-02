@@ -1,6 +1,7 @@
 export type ModeCardProps = {
   mode: "CASUAL" | "ARENA";
   balanceUSD: number;
+  onPlay?: () => void;
 };
 
 /**
@@ -8,7 +9,7 @@ export type ModeCardProps = {
  * Arena card requires positive balance; otherwise nudges "Add funds" instead
  * of allowing "Play for real" — copy rule: no gas/crypto/CELO language.
  */
-export function ModeCard({ mode, balanceUSD }: ModeCardProps) {
+export function ModeCard({ mode, balanceUSD, onPlay }: ModeCardProps) {
   if (mode === "CASUAL") {
     return (
       <div
@@ -19,6 +20,7 @@ export function ModeCard({ mode, balanceUSD }: ModeCardProps) {
         <p className="mt-1 text-sm text-slate-400">Free · practice matches</p>
         <button
           type="button"
+          onClick={onPlay}
           className="mt-4 w-full rounded-xl bg-arena-cyan py-2 text-sm font-bold uppercase text-arena-bg transition hover:brightness-110"
         >
           Play now
@@ -38,6 +40,7 @@ export function ModeCard({ mode, balanceUSD }: ModeCardProps) {
       {canPlay ? (
         <button
           type="button"
+          onClick={onPlay}
           className="mt-4 w-full rounded-xl bg-arena-gold py-2 text-sm font-bold uppercase text-arena-bg transition hover:brightness-110"
         >
           Play for real

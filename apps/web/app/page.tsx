@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { WalletWidget } from "../components/WalletWidget";
 import { ModeCard } from "../components/ModeCard";
 import { HistoryList, type HistoryEntry } from "../components/HistoryList";
@@ -12,6 +13,7 @@ import { useIsMiniPay } from "../lib/useIsMiniPay";
  * apps/server wires up in PR5 e2e integration; state here is local/mocked.
  */
 export default function DashboardPage() {
+  const router = useRouter();
   const isMiniPay = useIsMiniPay();
   const [balanceUSD] = useState(0);
   const [recentMatches] = useState<HistoryEntry[]>([]);
@@ -30,8 +32,12 @@ export default function DashboardPage() {
       )}
 
       <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <ModeCard mode="CASUAL" balanceUSD={balanceUSD} />
-        <ModeCard mode="ARENA" balanceUSD={balanceUSD} />
+        <ModeCard mode="CASUAL" balanceUSD={balanceUSD} onPlay={() => router.push("/matchmaking")} />
+        <ModeCard
+          mode="ARENA"
+          balanceUSD={balanceUSD}
+          onPlay={() => router.push("/matchmaking?mode=arena")}
+        />
       </section>
 
       <section className="mt-8">

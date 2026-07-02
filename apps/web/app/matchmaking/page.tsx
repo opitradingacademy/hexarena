@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { GameMode } from "@hexarena/shared/protocol";
 import { StakeSelector } from "../../components/StakeSelector";
 import { getSocket } from "../../lib/socketSingleton";
@@ -13,8 +13,19 @@ import { getSocket } from "../../lib/socketSingleton";
  * the game screen on `match_found`.
  */
 export default function MatchmakingPage() {
+  return (
+    <Suspense fallback={null}>
+      <MatchmakingScreen />
+    </Suspense>
+  );
+}
+
+function MatchmakingScreen() {
   const router = useRouter();
-  const [mode, setMode] = useState<GameMode>("CASUAL");
+  const searchParams = useSearchParams();
+  const [mode, setMode] = useState<GameMode>(
+    searchParams.get("mode") === "arena" ? "ARENA" : "CASUAL",
+  );
   const [stake, setStake] = useState<number | null>(null);
   const [status, setStatus] = useState<"idle" | "searching" | "cancelled">("idle");
   const balanceUSD = 0;
