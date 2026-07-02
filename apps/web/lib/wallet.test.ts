@@ -23,4 +23,10 @@ describe("getWalletAddress", () => {
     const request = vi.fn().mockRejectedValue(new Error("User rejected"));
     await expect(getWalletAddress({ request })).resolves.toBeNull();
   });
+
+  it("works with a MiniPay-shaped provider (isMiniPay flag present)", async () => {
+    const request = vi.fn().mockResolvedValue([ADDRESS]);
+    await expect(getWalletAddress({ request, isMiniPay: true } as never)).resolves.toBe(ADDRESS);
+    expect(request).toHaveBeenCalledWith({ method: "eth_requestAccounts" });
+  });
 });

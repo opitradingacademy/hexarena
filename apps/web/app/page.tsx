@@ -26,23 +26,54 @@ export default function DashboardPage() {
     let cancelled = false;
 
     async function loadBalance() {
+      const diag = (label: string, payload?: unknown) =>
+        // Prefixed for easy grep in minipay-debug logs.
+        console.log("[HexArena:diag]", label, payload ?? "");
+
+      diag("A.isMiniPay", { isMiniPay });
+
       // MiniPay injects window.ethereum asynchronously — wait for it (or the
       // 3s timeout) before reading it, otherwise this can race the
       // injection and see no provider / no accounts.
-      await waitForEthereum();
+      const waited = await waitForEthereum();
       const ethereum = window.ethereum;
-      const walletAddress =
-        ethereum && typeof ethereum.request === "function"
-          ? await getWalletAddress({ request: ethereum.request, enable: ethereum.enable })
-          : null;
-      const balance = await getUsdtBalance(walletAddress, getCeloPublicClient());
+      diag("B.windowEthereum", {
+        waited,
+        present: !!ethereum,
+        isMiniPayFlag: ethereum?.isMiniPay,
+        hasRequest: typeof ethereum?.request === "function",
+      });
+
+      let walletAddress: string | null = null;
+      try {
+        walletAddress =
+          ethereum && typeof ethereum.request === "function"
+            ? await getWalletAddress({
+                request: ethereum.request,
+                enable: ethereum.enable,
+              })
+            : null;
+      } catch (e) {
+        diag("B.walletError", { message: (e as Error).message });
+      }
+      diag("B.walletAddress", { walletAddress });
+
+      let balance: number | null = null;
+      try {
+        balance = await getUsdtBalance(walletAddress, getCeloPublicClient());
+      } catch (e) {
+        diag("C.balanceError", { message: (e as Error).message });
+      }
+      diag("C.balance", { balance });
+
       if (!cancelled) {
         setBalanceUSD(balance ?? 0);
         setBalanceLoading(false);
       }
     }
 
-    loadBalance().catch(() => {
+    loadBalance().catch((e) => {
+      console.log("[HexArena:diag] loadBalance.catch", (e as Error).message);
       if (!cancelled) setBalanceLoading(false);
     });
 
@@ -54,18 +85,27 @@ export default function DashboardPage() {
   return (
     <main className="mx-auto max-w-md px-4 pt-6">
       <nav className="flex items-center justify-between">
-        <span className="text-lg font-black uppercase tracking-widest text-arena-cyan">HexArena</span>
+        <span className="text-lg font-black uppercase tracking-widest text-arena-cyan">
+          HexArena
+        </span>
         <WalletWidget balanceUSD={balanceUSD} loading={balanceLoading} />
       </nav>
 
       {!isMiniPay && (
-        <p role="note" className="mt-4 rounded-xl border border-arena-gold/40 bg-arena-gold/10 px-4 py-2 text-sm text-arena-gold">
+        <p
+          role="note"
+          className="mt-4 rounded-xl border border-arena-gold/40 bg-arena-gold/10 px-4 py-2 text-sm text-arena-gold"
+        >
           Open this app inside MiniPay for the best experience.
         </p>
       )}
 
       <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <ModeCard mode="CASUAL" balanceUSD={balanceUSD} onPlay={() => router.push("/matchmaking")} />
+        <ModeCard
+          mode="CASUAL"
+          balanceUSD={balanceUSD}
+          onPlay={() => router.push("/matchmaking")}
+        />
         <ModeCard
           mode="ARENA"
           balanceUSD={balanceUSD}
