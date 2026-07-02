@@ -28,7 +28,7 @@ export default function DashboardPage() {
       const ethereum = window.ethereum;
       const walletAddress =
         ethereum && typeof ethereum.request === "function"
-          ? await getWalletAddress({ request: ethereum.request })
+          ? await getWalletAddress({ request: ethereum.request, enable: ethereum.enable })
           : null;
       const balance = await getUsdtBalance(walletAddress, getCeloPublicClient());
       if (!cancelled) {

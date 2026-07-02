@@ -6,6 +6,7 @@
 export type MiniPayEthereumProvider = {
   isMiniPay?: boolean;
   request?: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+  enable?: () => Promise<unknown>;
 };
 
 export function isMiniPay(ethereum: MiniPayEthereumProvider | undefined): boolean {
