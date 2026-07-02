@@ -74,25 +74,22 @@ export default function GamePage() {
 
   return (
     <main className="mx-auto flex max-w-md flex-col gap-4 px-4 pt-6">
-      <div className="flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-400">
-        <span>You are playing</span>
-        <span className={`h-3 w-3 rounded-full ${PIECE_COLOR[selfColor]}`} aria-hidden />
-        <span className="text-slate-200">{PIECE_COLOR_NAME[selfColor]}</span>
-      </div>
       <PlayerClock
         label={opponentLabel}
         remainingMs={state.clocks[opponentColor]}
         isTurn={state.turn === opponentColor}
         isSelf={false}
+        pieceColorClassName={PIECE_COLOR[opponentColor]}
       />
       <div className="overflow-x-auto py-2">
         <HexBoard state={state} onCellClick={handleCellClick} />
       </div>
       <PlayerClock
-        label="You"
+        label={`You (${PIECE_COLOR_NAME[selfColor]})`}
         remainingMs={state.clocks[selfColor]}
         isTurn={state.turn === selfColor}
         isSelf
+        pieceColorClassName={PIECE_COLOR[selfColor]}
       />
       <button
         type="button"
