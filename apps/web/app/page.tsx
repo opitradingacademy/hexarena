@@ -1,154 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { WalletWidget } from "../components/WalletWidget";
 import { ModeCard } from "../components/ModeCard";
 import { HistoryList, type HistoryEntry } from "../components/HistoryList";
-import { DiagPanel } from "../components/DiagPanel";
 import { useIsMiniPay } from "../lib/useIsMiniPay";
-import { getWalletAddress } from "../lib/wallet";
-import { getUsdtBalance } from "../lib/balance";
-import { waitForEthereum } from "../lib/waitForEthereum";
-import { createDiagLog, type DiagEntry } from "../lib/diag";
+import { useUsdtBalance } from "../lib/useUsdtBalance";
 
 /**
  * Dashboard screen (design.md wireframe "1. Dashboard").
- * Balance is read live from USDT on Celo Mainnet; history fetching from
- * apps/server still wires up in PR5 e2e integration.
+ * Balance is read live from USDT on Celo Mainnet via the injected
+ * MiniPay provider (see lib/useUsdtBalance for the resolver path).
  */
 export default function DashboardPage() {
   const router = useRouter();
+  const { loading, balance } = useUsdtBalance();
   const isMiniPay = useIsMiniPay();
-  const [balanceUSD, setBalanceUSD] = useState(0);
-  const [balanceLoading, setBalanceLoading] = useState(true);
-  const [recentMatches] = useState<HistoryEntry[]>([]);
-  const [diagEntries, setDiagEntries] = useState<DiagEntry[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let accountsChangedHandler: ((accounts: unknown) => void) | null = null;
-    const { entries, log } = createDiagLog();
-    const publish = () => {
-      if (!cancelled) setDiagEntries([...entries]);
-    };
-
-    async function loadBalance(reason: string) {
-      log(`A.start reason=${reason}`, { isMiniPay });
-
-      // MiniPay injects window.ethereum asynchronously — wait for it (or the
-      // 3s timeout) before reading it, otherwise this can race the
-      // injection and see no provider / no accounts.
-      const waited = await waitForEthereum();
-      const ethereum = window.ethereum;
-      log("B.windowEthereum", {
-        waited,
-        present: !!ethereum,
-        isMiniPayFlag: ethereum?.isMiniPay,
-        hasRequest: typeof ethereum?.request === "function",
-      });
-      publish();
-
-      let walletAddress: string | null = null;
-      try {
-        walletAddress =
-          ethereum && typeof ethereum.request === "function"
-            ? await getWalletAddress(
-                {
-                  request: ethereum.request,
-                  enable: ethereum.enable,
-                  selectedAddress: (ethereum as { selectedAddress?: string }).selectedAddress,
-                },
-                {
-                  retries: 6,
-                  delayMs: 500,
-                  // Per-step + per-attempt trace so a device retest can show
-                  // exactly which fallback won the race (selectedAddress,
-                  // eth_accounts, or a retry of eth_requestAccounts).
-                  onTrace: (t) => {
-                    log(
-                      `B.trace ${t.step} a=${t.attempt} ${t.elapsedMs}ms ${t.resultKind}${t.resultLen !== undefined ? `(${t.resultLen})` : ""}`,
-                      {
-                        selectedAddress: t.selectedAddress,
-                        errMessage: t.errMessage,
-                      },
-                    );
-                    publish();
-                  },
-                },
-              )
-            : null;
-      } catch (e) {
-        log("B.walletError", { message: (e as Error).message });
-      }
-      log("B.walletAddress", { walletAddress });
-      publish();
-
-      let balance: number | null = null;
-      try {
-        // Route the read through the injected provider (same as the
-        // proven-working reference Mini App): forno.celo.org is blocked
-        // by the MiniPay WebView's CORS policy, only the WebView's own
-        // RPC over the injected provider reaches the chain reliably.
-        if (ethereum?.request) {
-          const requestFn: (args: { method: string; params?: unknown[] }) => Promise<unknown> =
-            ethereum.request.bind(ethereum);
-          balance = await getUsdtBalance(walletAddress, { request: requestFn });
-        }
-      } catch (e) {
-        log("C.balanceError", { message: (e as Error).message });
-      }
-      log("C.balance", { balance });
-      publish();
-
-      if (!cancelled) {
-        setBalanceUSD(balance ?? 0);
-        setBalanceLoading(false);
-      }
-    }
-
-    loadBalance("mount").catch((e) => {
-      log("loadBalance.catch", { message: (e as Error).message });
-      publish();
-      if (!cancelled) setBalanceLoading(false);
-    });
-
-    // Subscribe to MiniPay's accountsChanged so a wallet switch in the
-    // provider triggers a fresh balance read on the same screen.
-    void waitForEthereum().then(() => {
-      if (cancelled) return;
-      const ethereum = window.ethereum as
-        | (typeof window.ethereum & {
-            on?: (event: string, handler: (...args: unknown[]) => void) => void;
-          })
-        | undefined;
-      if (!ethereum?.on) return;
-      accountsChangedHandler = () => {
-        if (!cancelled) {
-          setDiagEntries([]);
-          loadBalance("accountsChanged").catch(() => {
-            if (!cancelled) setBalanceLoading(false);
-          });
-        }
-      };
-      try {
-        ethereum.on("accountsChanged", accountsChangedHandler as never);
-      } catch {
-        // provider doesn't support accountsChanged — fine.
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      if (accountsChangedHandler) {
-        try {
-          window.ethereum?.removeListener?.("accountsChanged", accountsChangedHandler as never);
-        } catch {
-          // ignore
-        }
-      }
-    };
-  }, []);
+  const recentMatches: HistoryEntry[] = [];
 
   return (
     <main className="mx-auto max-w-md px-4 pt-6">
@@ -156,7 +24,7 @@ export default function DashboardPage() {
         <span className="text-lg font-black uppercase tracking-widest text-arena-cyan">
           HexArena
         </span>
-        <WalletWidget balanceUSD={balanceUSD} loading={balanceLoading} />
+        <WalletWidget balanceUSD={balance} loading={loading} />
       </nav>
 
       {!isMiniPay && (
@@ -169,14 +37,10 @@ export default function DashboardPage() {
       )}
 
       <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <ModeCard
-          mode="CASUAL"
-          balanceUSD={balanceUSD}
-          onPlay={() => router.push("/matchmaking")}
-        />
+        <ModeCard mode="CASUAL" balanceUSD={balance} onPlay={() => router.push("/matchmaking")} />
         <ModeCard
           mode="ARENA"
-          balanceUSD={balanceUSD}
+          balanceUSD={balance}
           onPlay={() => router.push("/matchmaking?mode=arena")}
         />
       </section>
@@ -187,8 +51,6 @@ export default function DashboardPage() {
           <HistoryList entries={recentMatches} />
         </div>
       </section>
-
-      <DiagPanel entries={diagEntries} />
     </main>
   );
 }

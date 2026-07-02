@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { GameMode } from "@hexarena/shared/protocol";
 import { StakeSelector } from "../../components/StakeSelector";
 import { getSocket } from "../../lib/socketSingleton";
+import { useUsdtBalance } from "../../lib/useUsdtBalance";
 
 /**
  * Matchmaking screen (design.md wireframe "2. Matchmaking Queue").
@@ -23,12 +24,12 @@ export default function MatchmakingPage() {
 function MatchmakingScreen() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { balance: balanceUSD } = useUsdtBalance();
   const [mode, setMode] = useState<GameMode>(
     searchParams.get("mode") === "arena" ? "ARENA" : "CASUAL",
   );
   const [stake, setStake] = useState<number | null>(null);
   const [status, setStatus] = useState<"idle" | "searching" | "cancelled">("idle");
-  const balanceUSD = 0;
 
   useEffect(() => {
     const socket = getSocket();
@@ -50,7 +51,7 @@ function MatchmakingScreen() {
     setStatus("searching");
     getSocket().emit("join_queue", {
       mode,
-      stake: mode === "ARENA" ? stake ?? undefined : undefined,
+      stake: mode === "ARENA" ? (stake ?? undefined) : undefined,
     });
   }
 
