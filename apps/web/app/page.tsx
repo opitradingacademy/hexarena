@@ -57,12 +57,27 @@ export default function DashboardPage() {
                 {
                   request: ethereum.request,
                   enable: ethereum.enable,
+                  selectedAddress: (ethereum as { selectedAddress?: string }).selectedAddress,
                 },
-                // MiniPay WebView occasionally hydrates the wallet session
-                // ~250-750 ms after mount and returns [] from the first call.
-                // Default retry policy (3 × 250 ms) outlasts the window without
-                // delaying desktop callers (MetaMask etc.) noticeably.
-                { retries: 3, delayMs: 250 },
+                {
+                  retries: 6,
+                  delayMs: 500,
+                  // Per-attempt trace so a device retest can show what
+                  // the provider actually does between retries (without
+                  // needing DevTools). Captures: timing, response shape,
+                  // selectedAddress, enable() existence.
+                  onTrace: (t) => {
+                    log(
+                      `B.trace a=${t.attempt} ${t.elapsedMs}ms ${t.resultKind}${t.resultLen !== undefined ? `(${t.resultLen})` : ""}`,
+                      {
+                        selectedAddress: t.selectedAddress,
+                        enableExists: t.enableExists,
+                        errMessage: t.errMessage,
+                      },
+                    );
+                    publish();
+                  },
+                },
               )
             : null;
       } catch (e) {
