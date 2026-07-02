@@ -27,13 +27,14 @@ export default function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
+    let accountsChangedHandler: ((accounts: unknown) => void) | null = null;
     const { entries, log } = createDiagLog();
     const publish = () => {
       if (!cancelled) setDiagEntries([...entries]);
     };
 
-    async function loadBalance() {
-      log("A.isMiniPay", { isMiniPay });
+    async function loadBalance(reason: string) {
+      log(`A.start reason=${reason}`, { isMiniPay });
 
       // MiniPay injects window.ethereum asynchronously — wait for it (or the
       // 3s timeout) before reading it, otherwise this can race the
@@ -52,10 +53,17 @@ export default function DashboardPage() {
       try {
         walletAddress =
           ethereum && typeof ethereum.request === "function"
-            ? await getWalletAddress({
-                request: ethereum.request,
-                enable: ethereum.enable,
-              })
+            ? await getWalletAddress(
+                {
+                  request: ethereum.request,
+                  enable: ethereum.enable,
+                },
+                // MiniPay WebView occasionally hydrates the wallet session
+                // ~250-750 ms after mount and returns [] from the first call.
+                // Default retry policy (3 × 250 ms) outlasts the window without
+                // delaying desktop callers (MetaMask etc.) noticeably.
+                { retries: 3, delayMs: 250 },
+              )
             : null;
       } catch (e) {
         log("B.walletError", { message: (e as Error).message });
@@ -78,14 +86,46 @@ export default function DashboardPage() {
       }
     }
 
-    loadBalance().catch((e) => {
+    loadBalance("mount").catch((e) => {
       log("loadBalance.catch", { message: (e as Error).message });
       publish();
       if (!cancelled) setBalanceLoading(false);
     });
 
+    // Subscribe to MiniPay's accountsChanged so a wallet switch in the
+    // provider triggers a fresh balance read on the same screen.
+    void waitForEthereum().then(() => {
+      if (cancelled) return;
+      const ethereum = window.ethereum as
+        | (typeof window.ethereum & {
+            on?: (event: string, handler: (...args: unknown[]) => void) => void;
+          })
+        | undefined;
+      if (!ethereum?.on) return;
+      accountsChangedHandler = () => {
+        if (!cancelled) {
+          setDiagEntries([]);
+          loadBalance("accountsChanged").catch(() => {
+            if (!cancelled) setBalanceLoading(false);
+          });
+        }
+      };
+      try {
+        ethereum.on("accountsChanged", accountsChangedHandler as never);
+      } catch {
+        // provider doesn't support accountsChanged — fine.
+      }
+    });
+
     return () => {
       cancelled = true;
+      if (accountsChangedHandler) {
+        try {
+          window.ethereum?.removeListener?.("accountsChanged", accountsChangedHandler as never);
+        } catch {
+          // ignore
+        }
+      }
     };
   }, []);
 

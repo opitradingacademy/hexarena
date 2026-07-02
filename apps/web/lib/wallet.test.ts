@@ -29,4 +29,29 @@ describe("getWalletAddress", () => {
     await expect(getWalletAddress({ request, isMiniPay: true } as never)).resolves.toBe(ADDRESS);
     expect(request).toHaveBeenCalledWith({ method: "eth_requestAccounts" });
   });
+
+  it("retries eth_requestAccounts when the first call returns [] (MiniPay WebView race)", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([ADDRESS]);
+    const result = await getWalletAddress({ request }, { retries: 3, delayMs: 0 });
+    expect(result).toBe(ADDRESS);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("respects the existing fast-path: retries=0 means no retry", async () => {
+    const request = vi.fn().mockResolvedValue([]);
+    const result = await getWalletAddress({ request }, { retries: 0, delayMs: 0 });
+    expect(result).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null when all retries are exhausted and provider never yields accounts", async () => {
+    const request = vi.fn().mockResolvedValue([]);
+    const result = await getWalletAddress({ request }, { retries: 2, delayMs: 0 });
+    expect(result).toBeNull();
+    expect(request).toHaveBeenCalledTimes(3);
+  });
 });
