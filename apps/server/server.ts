@@ -6,26 +6,56 @@
 import { Server, type Socket } from "socket.io";
 import type { Server as HttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { isAddress } from "viem";
-import type {
-  ClientToServerEvents,
-  ServerToClientEvents,
-} from "@hexarena/shared/protocol";
+import { createPublicClient, http, isAddress, type PublicClient } from "viem";
+import { celo } from "viem/chains";
+import type { ClientToServerEvents, ServerToClientEvents } from "@hexarena/shared/protocol";
 import { serializeGameState, type PlayerId } from "@hexarena/shared/domain/board";
 import type { LedgerStore, UserId } from "./ledger/types";
 import { balanceOf } from "./ledger/ledger";
 import { Matchmaker, type QueueEntry } from "./matchmaking";
 import { MatchSession } from "./matchSession";
+import { handleDepositRequest } from "./depositEndpoint";
+import type { VerifyDepositProvider } from "./chain/verifyDeposit";
 
-export function createServer(httpServer: HttpServer, store: LedgerStore) {
+/**
+ * Minimal shape of a viem PublicClient that verifyDeposit needs.
+ * Splitting it this way keeps verifyDeposit's unit tests free of viem
+ * chain plumbing and lets the server inject its real RPC client.
+ */
+type CeloPublicClient = Pick<PublicClient, "getTransactionReceipt">;
+
+export type CreateServerOpts = {
+  /** Treasury address that receives user Arena stakes. Required for /api/deposit. */
+  treasuryAddress: `0x${string}`;
+  /** viem public client for reading tx receipts. Required for /api/deposit. */
+  publicClient: CeloPublicClient;
+};
+
+export function createServer(httpServer: HttpServer, store: LedgerStore, opts: CreateServerOpts) {
   const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     cors: { origin: "*" },
   });
 
-  // Read endpoint for the History screen (task 2.14, design.md Wireframe #4).
-  // GET /matches/:userId -> reverse-chronological match history.
-  httpServer.on("request", (req, res) => {
+  const provider: VerifyDepositProvider = {
+    getTransactionReceipt: (args) => opts.publicClient.getTransactionReceipt(args),
+  };
+
+  // HTTP request dispatcher — single hand-off point for all REST endpoints.
+  httpServer.on("request", async (req, res) => {
     const url = new URL(req.url ?? "", "http://localhost");
+
+    // POST /api/deposit — credit ledger with on-chain USDT transfer (see
+    // depositEndpoint.ts NatSpec for the full contract).
+    if (url.pathname === "/api/deposit") {
+      await handleDepositRequest(req, res, store, {
+        treasury: opts.treasuryAddress,
+        provider,
+        settleTokenDecimals: 6,
+      });
+      return;
+    }
+
+    // GET /matches/:userId — read endpoint for the History screen.
     const match = url.pathname.match(/^\/matches\/([^/]+)$/);
     if (req.method === "GET" && match) {
       const userId = decodeURIComponent(match[1]);
@@ -66,7 +96,10 @@ export function createServer(httpServer: HttpServer, store: LedgerStore) {
       if (payload.mode === "ARENA") {
         const stake = payload.stake ?? 0;
         if (balanceOf(store, userId) < stake) {
-          socket.emit("error", { code: "INSUFFICIENT_BALANCE", msg: "Insufficient balance for stake" });
+          socket.emit("error", {
+            code: "INSUFFICIENT_BALANCE",
+            msg: "Insufficient balance for stake",
+          });
           return;
         }
       }
