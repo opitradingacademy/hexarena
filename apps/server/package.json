@@ -1,0 +1,20 @@
+{
+  "name": "@hexarena/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Application layer: Socket.IO transport, matchmaking, clock, sessions, ledger, chain adapter (viem signer stub).",
+  "main": "./index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "tsx watch index.ts"
+  },
+  "dependencies": {
+    "@hexarena/shared": "workspace:*",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.5",
+    "tsx": "^4.16.0"
+  }
+}

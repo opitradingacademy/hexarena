@@ -1,0 +1,22 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+solc_version = "0.8.24"
+optimizer = true
+optimizer_runs = 200
+
+remappings = [
+  "forge-std/=lib/forge-std/src/",
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+]
+
+# Celo networks (see packages/shared/chain for verified addresses).
+# Mainnet chainId=42220, Sepolia testnet chainId=11142220.
+[rpc_endpoints]
+celo_mainnet = "${CELO_MAINNET_RPC_URL}"
+celo_sepolia = "${CELO_SEPOLIA_RPC_URL}"
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

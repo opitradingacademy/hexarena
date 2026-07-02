@@ -1,0 +1,17 @@
+{
+  "name": "@hexarena/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./domain/board.ts",
+  "types": "./domain/board.ts",
+  "exports": {
+    ".": "./domain/board.ts",
+    "./domain/board": "./domain/board.ts",
+    "./protocol": "./protocol/index.ts",
+    "./chain": "./chain/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

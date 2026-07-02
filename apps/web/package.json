@@ -1,0 +1,32 @@
+{
+  "name": "@hexarena/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Next.js MiniPay client — MVP structural implementation (PR4).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "test": "vitest run",
+    "lint:copy": "tsx bin/check-copy-rules.ts",
+    "check:bundle-size": "tsx bin/check-bundle-size.ts",
+    "analyze": "ANALYZE=true next build"
+  },
+  "dependencies": {
+    "next": "^15",
+    "react": "^19",
+    "react-dom": "^19",
+    "socket.io-client": "^4.7.5",
+    "viem": "^2"
+  },
+  "devDependencies": {
+    "@hexarena/shared": "workspace:^",
+    "@next/bundle-analyzer": "^15",
+    "@testing-library/jest-dom": "^6",
+    "@testing-library/react": "^16",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "jsdom": "^25",
+    "tsx": "^4.16.0"
+  }
+}

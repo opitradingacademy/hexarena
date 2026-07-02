@@ -1,0 +1,33 @@
+change: hexarena-mvp
+phases:
+  proposal:
+    status: done
+    backend: engram (backfilled to openspec)
+  specs:
+    status: done
+    backend: hybrid (engram + openspec)
+    domains: [game-engine, arena-settlement, realtime-protocol, minipay-client]
+  design:
+    status: done
+    backend: engram (backfilled to openspec)
+  tasks:
+    status: done
+    backend: hybrid (engram + openspec)
+    total_tasks: 50
+    delivery_strategy: chained PRs (ask-on-risk resolved by user)
+  apply:
+    status: in_progress
+    backend: hybrid (engram + openspec)
+    completed_prs:
+      - PR1: bootstrap + packages/shared (Phase 0-1, 14/14 tasks)
+      - PR2: apps/server ledger + Socket.IO (Phase 2, 14/14 tasks)
+      - PR3: packages/contracts ArenaSettlement.sol (Phase 3, 6/8 tasks — 3.7 deploy script written but not executed, 3.8 real settleOnChain wiring deferred)
+      - PR4: apps/web MiniPay client (Phase 4, 8/8 tasks)
+    pending_prs:
+      - PR5: e2e integration (wire web<->server<->contract) + Proof of Ship shipping checklist (Phase 5, 6 tasks) — needs user decisions (deploy keys, hosting) before starting
+    test_suite: 77/77 passing (packages/shared + apps/server + apps/web) + 12/12 Foundry tests (packages/contracts)
+  verify:
+    status: pending
+  archive:
+    status: pending
+last_updated: 2026-07-02

@@ -1,0 +1,38 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Monorepo (pnpm workspaces).
+    - apps/web: Next.js Mini App (MiniPay), viem, board renderer (lazy-loaded).
+    - apps/server: Node.js + Socket.IO, server-authoritative game loop, matchmaking, ledger, chain adapter (viem signer).
+    - packages/shared: pure domain (board math, engine), WS protocol types, contract ABI + verified Mainnet addresses.
+    - packages/contracts: Solidity ArenaSettlement.sol, Foundry toolchain, deploy scripts, tests.
+  Architecture: Hexagonal — pure domain module (no I/O) in packages/shared, driven by thin Socket.IO application layer.
+  Testing: No test runner selected yet (greenfield). Strict TDD deferred until Vitest/Jest is chosen for apps/server + packages/shared;
+    Foundry tests planned for packages/contracts.
+  Style: RFC 2119 keywords + Given/When/Then scenarios for specs.
+  Program constraint: Celo Proof of Ship Season 2 — requires 1 contract verified on Celo Mainnet, public GitHub repo, live hosted app,
+    talent.app registration.
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+    - Domains: game-engine, arena-settlement, realtime-protocol, minipay-client
+  design:
+    - Include sequence diagrams / data-flow narratives for complex flows
+    - Document architecture decisions with rationale (decision tables)
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    - Follow existing code patterns
+    tdd: false           # Flip to true once Vitest/Jest + Foundry are wired in
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas

@@ -1,0 +1,12 @@
+{
+  "name": "@hexarena/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Foundry project: ArenaSettlement.sol — pre-funded Arena prize-pool payout contract for Celo. See design.md D1.",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test",
+    "deploy:sepolia": "forge script script/Deploy.s.sol:Deploy --rpc-url celo_sepolia --broadcast --verify -vvvv",
+    "deploy:mainnet": "forge script script/Deploy.s.sol:Deploy --rpc-url celo_mainnet --broadcast --verify -vvvv"
+  }
+}
