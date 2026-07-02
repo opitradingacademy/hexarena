@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { createGame, deserializeGameState, type Axial, type GameState, type PlayerId } from "@hexarena/shared/domain/board";
 import type { GameOverPayload } from "@hexarena/shared/protocol";
-import { HexBoard } from "../../../components/HexBoard";
+import { HexBoard, PIECE_COLOR, PIECE_COLOR_NAME } from "../../../components/HexBoard";
 import { PlayerClock } from "../../../components/PlayerClock";
 import { ResultBanner } from "../../../components/ResultBanner";
 import { getSocket } from "../../../lib/socketSingleton";
@@ -74,6 +74,11 @@ export default function GamePage() {
 
   return (
     <main className="mx-auto flex max-w-md flex-col gap-4 px-4 pt-6">
+      <div className="flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-400">
+        <span>You are playing</span>
+        <span className={`h-3 w-3 rounded-full ${PIECE_COLOR[selfColor]}`} aria-hidden />
+        <span className="text-slate-200">{PIECE_COLOR_NAME[selfColor]}</span>
+      </div>
       <PlayerClock
         label={opponentLabel}
         remainingMs={state.clocks[opponentColor]}

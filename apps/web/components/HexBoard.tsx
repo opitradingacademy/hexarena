@@ -21,9 +21,14 @@ function axialToPixel(q: number, r: number) {
   return { x: x + CENTER, y: y + CENTER };
 }
 
-const PIECE_COLOR: Record<"P1" | "P2", string> = {
+export const PIECE_COLOR: Record<"P1" | "P2", string> = {
   P1: "bg-arena-cyan shadow-neonCyan",
   P2: "bg-arena-magenta shadow-neonMagenta",
+};
+
+export const PIECE_COLOR_NAME: Record<"P1" | "P2", string> = {
+  P1: "Cyan",
+  P2: "Magenta",
 };
 
 /**
