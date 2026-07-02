@@ -8,3 +8,4 @@ coverage/
 .env.local
 out/
 tools/*.exe
+.github-token
