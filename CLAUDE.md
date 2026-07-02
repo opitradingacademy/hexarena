@@ -11,13 +11,16 @@ Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos
 - Progreso de implementación detallado: Engram, topic_key `sdd/hexarena-mvp/apply-progress`.
 
 **Al día de hoy (2026-07-02)**: PR1-PR5 de 5 completados. Todo deployado y en producción:
+
 - Repo público: https://github.com/opitradingacademy/hexarena (rama `main`). Push requiere `bash scripts/push-with-token.sh main` (token en `.github-token`, gitignored — no hay credenciales persistentes en `git config`).
 - `apps/server` en Railway: https://hexarenaserver-production.up.railway.app
 - `apps/web` en Vercel: https://web-taupe-alpha-23.vercel.app (deployado vía CLI con `vercel --prod`, config en `vercel.json` de la raíz para que Vercel entienda el monorepo pnpm — root del proyecto Vercel es la raíz del repo, no `apps/web`, porque necesita ver el lockfile completo).
 - `ArenaSettlement.sol` en Celo Mainnet: `0x108E012C3B12421f216cA5C2C59770c34653e1d0`, verificado en Celoscan (https://celoscan.io/address/0x108e012c3b12421f216ca5c2c59770c34653e1d0). Token de settlement: USDT real (`0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`, NO la dirección de fee-abstraction de MiniPay).
-- Integración e2e real (Casual + Arena) probada con dos clientes de socket reales, 104/104 tests Vitest.
+- Integración e2e real (Casual + Arena) probada con dos clientes de socket reales, 125/125 tests Vitest.
 
-**Único pendiente real**: `openspec/changes/hexarena-mvp/tasks.md` → sección "Known Issues" — el balance de USDT en el Dashboard muestra $0.00 en el dispositivo físico de MiniPay pese a múltiples fixes reales confirmados (ver historial de debugging ahí). No asumir que está resuelto sin retest en dispositivo. Registro en talent.app (5.6) sigue pendiente, es acción manual del usuario.
+**Resuelto (2026-07-02)**: el bug histórico del balance USDT en $0.00. Tres causas concurrentes que se atacaron en commits `c1495c5` → `6f9ebb9` → `9275b5f`: (1) `useIsMiniPay` con `useState(false)` quedaba stale en mount, (2) `getWalletAddress` no leía `provider.selectedAddress` antes que `eth_requestAccounts` (este último rompe en el provider-stub del WebView), (3) `getUsdtBalance` usaba viem+forno.celo.org inalcanzable por CORS desde el WebView. También se descubrió un hardcoded `balanceUSD = 0` en MatchmakingScreen que bloqueaba el flujo Arena. Ver `openspec/changes/hexarena-mvp/tasks.md` para el detalle. Patrón canónico que queda en la base: cualquier read on-chain desde una Mini App se hace con `eth_call` por el provider inyectado, nunca con un RPC público HTTP.
+
+**Único pendiente real**: registro en talent.app (task 5.6) — acción manual del usuario. Submission a MiniPay catalogue (Stage 2: UI screenshot 360×640, PageSpeed ≥90, ToS/Privacy, 24h SLA) sigue fuera del scope del MVP.
 
 ## Alcance del MVP
 
