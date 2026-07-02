@@ -20,6 +20,8 @@ export default function GamePage() {
   const router = useRouter();
   const matchId = params.matchId;
   const selfColor = (searchParams.get("color") as PlayerId | null) ?? "P1";
+  const opponentId = searchParams.get("opponent");
+  const opponentLabel = opponentId ? `Opponent #${opponentId.slice(0, 4).toUpperCase()}` : "Opponent";
 
   const [state, setState] = useState<GameState>(createGame());
   const [gameOver, setGameOver] = useState<GameOverPayload | null>(null);
@@ -72,11 +74,21 @@ export default function GamePage() {
 
   return (
     <main className="mx-auto flex max-w-md flex-col gap-4 px-4 pt-6">
-      <PlayerClock label="Opponent" remainingMs={state.clocks[opponentColor]} isTurn={state.turn === opponentColor} />
+      <PlayerClock
+        label={opponentLabel}
+        remainingMs={state.clocks[opponentColor]}
+        isTurn={state.turn === opponentColor}
+        isSelf={false}
+      />
       <div className="overflow-x-auto py-2">
         <HexBoard state={state} onCellClick={handleCellClick} />
       </div>
-      <PlayerClock label="You" remainingMs={state.clocks[selfColor]} isTurn={state.turn === selfColor} />
+      <PlayerClock
+        label="You"
+        remainingMs={state.clocks[selfColor]}
+        isTurn={state.turn === selfColor}
+        isSelf
+      />
       <button
         type="button"
         onClick={handleResign}

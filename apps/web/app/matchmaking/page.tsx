@@ -34,8 +34,10 @@ function MatchmakingScreen() {
     const socket = getSocket();
     if (!socket.connected) socket.connect();
 
-    function onMatchFound(payload: { matchId: string; color: "P1" | "P2" }) {
-      router.push(`/game/${payload.matchId}?color=${payload.color}`);
+    function onMatchFound(payload: { matchId: string; color: "P1" | "P2"; opponent: string }) {
+      router.push(
+        `/game/${payload.matchId}?color=${payload.color}&opponent=${encodeURIComponent(payload.opponent)}`,
+      );
     }
 
     socket.on("match_found", onMatchFound);

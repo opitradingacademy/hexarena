@@ -4,6 +4,7 @@ export type PlayerClockProps = {
   label: string;
   remainingMs: number;
   isTurn: boolean;
+  isSelf: boolean;
 };
 
 const LOW_TIME_THRESHOLD_MS = 15_000;
@@ -11,9 +12,13 @@ const LOW_TIME_THRESHOLD_MS = 15_000;
 /**
  * Clock display for the in-game board screen (design.md "3. In-Game Board")
  * — turns "red"/urgent below 15s, dims when it's not this player's turn.
+ * `isSelf` disambiguates the turn label from `isTurn` (whose turn it is)
+ * so the opponent's row never claims "Your turn" — each row states the
+ * turn from its OWN owner's perspective.
  */
-export function PlayerClock({ label, remainingMs, isTurn }: PlayerClockProps) {
+export function PlayerClock({ label, remainingMs, isTurn, isSelf }: PlayerClockProps) {
   const low = remainingMs < LOW_TIME_THRESHOLD_MS;
+  const turnText = isTurn ? (isSelf ? "Your turn" : "Opponent's turn") : "Waiting…";
   return (
     <div
       data-testid="player-clock"
@@ -31,7 +36,7 @@ export function PlayerClock({ label, remainingMs, isTurn }: PlayerClockProps) {
         {formatClock(remainingMs)}
       </span>
       <span className={`text-xs font-bold uppercase ${isTurn ? "text-arena-cyan" : "text-slate-500"}`}>
-        {isTurn ? "Your turn" : "Opponent's turn"}
+        {turnText}
       </span>
     </div>
   );
