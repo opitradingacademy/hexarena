@@ -28,18 +28,11 @@ let socket: HexArenaSocket | null = null;
 export function getSocket(): HexArenaSocket {
   if (!socket) {
     socket = createSocketClient(getServerUrl(), async () => {
-      const ethereum = window.ethereum as
-        { request: (...args: unknown[]) => Promise<unknown> } | undefined;
-      if (!ethereum?.request) return {};
       try {
         // Production 2026-07-03: ensure MiniPay's window.ethereum is
         // injected (fire-and-forget — socket.io will retry on reconnect).
         await waitForEthereum();
-        const address = await getWalletAddress({
-          request: ethereum.request.bind(ethereum) as Parameters<
-            typeof getWalletAddress
-          >[0]["request"],
-        });
+        const address = await getWalletAddress(window.ethereum as never);
         return address ? { walletAddress: address } : {};
       } catch {
         return {};

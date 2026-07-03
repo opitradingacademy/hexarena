@@ -18,21 +18,24 @@ Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos
 
 ### Estado del Arena deposit flow al cierre
 
-**Causa raíz del modal-loop, finalmente identificada y arreglada en commit `7dd3c0c` (ver "Hallazgos críticos" abajo):**
+**Causa raíz del modal-loop de firmas redundantes e insuficiencia de saldo artificial (Identificado y solucionado):**
 
-`socketSingleton.ts` cacheaba `walletAddress` SOLO en module-load. MiniPay inyecta `window.ethereum` asincrónicamente (evento `ethereum#initialized`); la primera lectura fallaba al module-load y quedaba en `undefined` para siempre. Cada socket reconnect mandaba `auth` sin wallet → server caía al fallback `socket.id` (que cambia cada reconnect) → el matchmaker evaluaba `balanceOf(store, $randomSocketId)` que siempre era 0 → tiraba `INSUFFICIENT_BALANCE` → el cliente reabría el modal. Curl `/api/balance` siempre devolvía el balance correcto (esa ruta NO depende del socket auth). Por eso los fixes de los días anteriores fallaban en parecer arreglar el problema.
+A pesar de tener saldo, el flujo de depósito volvía a pedir firma debido a dos factores:
+1. **Discrepancia de case-sensitivity del `userId`:** En `apps/server/server.ts`, el `userIdFor(socket)` resolvía la wallet del handshake sin normalizar (posiblemente lowercase). Sin embargo, los endpoints `/api/deposit` y `/api/balance` normalizaban usando `getAddress` (casing con checksum EIP-55). En la base de datos SQLite (case-sensitive), el saldo del usuario se acreditaba bajo la wallet checksummed (`0x34D...`), pero el socket ejecutaba `join_queue` bajo el `userId` en minúsculas (`0x34d...`), devolviendo balance 0 y disparando `INSUFFICIENT_BALANCE` de forma infinita.
+2. **Reseteo del diálogo a `idle`:** El diálogo `StakeConfirmDialog` reseteaba su estado a `idle` al reabrirse, perdiendo cualquier tracking de transacción firmada previa en curso y obligando a firmar de nuevo.
 
-**El fix definitivo** (`7dd3c0c`): `getSocket()` ahora resuelve la wallet en cada `auth` callback. socket.io-client llama `auth` en cada reconnect, así que después del primer intento exitoso el `userId` se mantiene estable a `0x5288AcFd5c2371f880b4A2BBEE8aF647bD9a051b` (tu wallet MiniPay) y todos los join_queue evalúan el balance correcto.
+**El fix definitivo:** `userIdFor(socket)` ahora normaliza la wallet con `getAddress(walletAddress)` al igual que el resto del backend, haciendo que el ID del socket coincida exactamente con los registros del Ledger en la base de datos.
 
 ### Hallazgos críticos de esta sesión de debugging
 
-Cada uno es un bug real que hubiera roto el flow en device físico. Los 4 primeros síntomas son reales; solo el #5 es la causa raíz definitiva.
+Cada uno es un bug real que hubiera roto el flow en device físico. Los 4 primeros síntomas son reales; solo el #5 y #6 son las causas raíces definitivas.
 
 1. **MiniPay `eth_getTransactionReceipt` returns null/throws** incluso para tx minadas, porque el provider-stub del WebView tiene una vista local atrasada del chain state. Cliente delega al server slow-path de 40s con multi-RPC polling. (commits `c1495c5`, `c8fe73c`)
 2. **Public RPC propagation lag** (publicNode/forno) de 2-30s para tx recién minadas. Server bypasses fallback-sequencial y hace poll paralelo contra múltiples RPCs (`primaryClient` + `fornoClient`). (commit `8774eba`)
 3. **`MemoryLedgerStore` perdía el balance en cada redeploy** de Railway. Reemplazado por `SqliteLedgerStore` con `better-sqlite3`. Default `/tmp/hexarena.db` (writable pero volátil); para persistencia real setear `SQLITE_PATH=/data/hexarena.db` con un volume montado. (commit `0ef5812`)
 4. **`Matchmaker.join()` matcheaba al user consigo mismo** cuando su entry anterior seguía en la queue (porque `cancel_queue` solo se dispara en user action, no en socket disconnect). Filtrar self-entries en el lookup. (commit `66a15e2`)
-5. **La causa raíz definitiva**: `socketSingleton.ts` cacheaba `walletAddress` en module-load — reescrito para resolverlo async en cada reconnect. (commit `7dd3c0c`)
+5. **La causa raíz definitiva de la inyección**: `socketSingleton.ts` cacheaba `walletAddress` en module-load — reescrito para resolverlo async en cada reconnect. (commit `7dd3c0c`)
+6. **La causa raíz definitiva de firmas duplicadas/insuficiencia de saldo**: Discrepancia entre `userId` de socket sin normalizar (lowercase) y el Ledger en SQLite (casing checksummed de EIP-55 via `getAddress`), provocando que la cola de matchmaking leyera balance 0 e ignorara los depósitos ya acreditados.
 
 ### Trabajo complementario de la sesión
 

@@ -136,10 +136,10 @@ describe("MatchmakingScreen — Arena stake balance reuse", () => {
     // First refresh (Find Match) returns 0 → modal opens because
     // ledger hasn't caught up. Second refresh (after stake
     // confirmation) returns 0.1 → auto-resumes the queue.
-    let refreshCalls = 0;
+    let _refreshCalls = 0;
     ledgerState = {
       balance: 0,
-      refresh: vi.fn().mockImplementation(async () => (refreshCalls++ === 0 ? 0 : 0.1)),
+      refresh: vi.fn().mockImplementation(async () => (_refreshCalls++ === 0 ? 0 : 0.1)),
     };
     render(<MatchmakingPage />);
     fireEvent.click(screen.getByText("$0.10"));
@@ -155,7 +155,6 @@ describe("MatchmakingScreen — Arena stake balance reuse", () => {
 
   it("does NOT auto-resume if the ledger still shows 0 after stake confirmation — sets a 'queued' hint", async () => {
     mockEthereumSuccess();
-    let refreshCalls = 0;
     ledgerState = {
       balance: 0,
       refresh: vi.fn().mockImplementation(async () => 0),

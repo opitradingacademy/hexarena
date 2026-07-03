@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { GameMode } from "@hexarena/shared/protocol";
 import { StakeSelector } from "../../components/StakeSelector";
@@ -10,15 +10,6 @@ import { useServerLedger } from "../../lib/useServerLedger";
 import { getWalletAddress } from "../../lib/wallet";
 import { waitForEthereum } from "../../lib/waitForEthereum";
 import { getArenaTreasuryAddress, getDepositUrl } from "../../lib/serverUrl";
-
-/** Track the freshest value of `value` in a ref for sync closures. */
-function useStateRef<T>(value: T): { current: T } {
-  const ref = useRef(value);
-  useEffect(() => {
-    ref.current = value;
-  }, [value]);
-  return ref;
-}
 
 /**
  * Matchmaking screen (design.md wireframe "2. Matchmaking Queue").

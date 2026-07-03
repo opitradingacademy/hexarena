@@ -6,7 +6,7 @@
 import { Server, type Socket } from "socket.io";
 import type { Server as HttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { createPublicClient, http, isAddress, type PublicClient } from "viem";
+import { createPublicClient, http, isAddress, getAddress, type PublicClient } from "viem";
 import { celo } from "viem/chains";
 import type { ClientToServerEvents, ServerToClientEvents } from "@hexarena/shared/protocol";
 import { serializeGameState, type PlayerId } from "@hexarena/shared/domain/board";
@@ -203,7 +203,7 @@ export function createServer(
     // Ledger users are upserted lazily on first use.
     const walletAddress = socket.handshake.auth?.walletAddress;
     if (typeof walletAddress === "string" && isAddress(walletAddress)) {
-      return walletAddress;
+      return getAddress(walletAddress);
     }
     return socket.id;
   }

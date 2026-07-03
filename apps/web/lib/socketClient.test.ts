@@ -24,30 +24,34 @@ describe("createSocketClient", () => {
     );
   });
 
-  it("wraps the auth provider in socket.io-client's callback-style auth contract", () => {
+  it("wraps the auth provider in socket.io-client's callback-style auth contract", async () => {
     // socket.io-client requires a function auth option to be CALLBACK-style
     // (`(cb) => cb(data)`) — a function that just returns data directly is
     // never invoked correctly by the client and hangs the connection before
     // the Socket.IO connect packet is ever sent. Regression test for that.
-    const auth = () => ({ walletAddress: "0xabc" });
+    const auth = () => Promise.resolve({ walletAddress: "0xabc" });
     createSocketClient("https://api.hexarena.example", auth);
     const options = vi.mocked(io).mock.calls.at(-1)?.[1] as { auth: unknown };
     expect(typeof options.auth).toBe("function");
 
     const cb = vi.fn();
     (options.auth as (cb: (data: unknown) => void) => void)(cb);
+    await Promise.resolve(); // wait for microtask to resolve
+    await Promise.resolve(); // wait another tick for then() chain
     expect(cb).toHaveBeenCalledWith({ walletAddress: "0xabc" });
   });
 
-  it("re-evaluates the auth provider on each connection attempt", () => {
+  it("re-evaluates the auth provider on each connection attempt", async () => {
     let wallet = "0xabc";
-    const auth = () => ({ walletAddress: wallet });
+    const auth = () => Promise.resolve({ walletAddress: wallet });
     createSocketClient("https://api.hexarena.example", auth);
     const options = vi.mocked(io).mock.calls.at(-1)?.[1] as { auth: unknown };
 
     wallet = "0xdef";
     const cb = vi.fn();
     (options.auth as (cb: (data: unknown) => void) => void)(cb);
+    await Promise.resolve(); // wait for microtask
+    await Promise.resolve(); // wait for then()
     expect(cb).toHaveBeenCalledWith({ walletAddress: "0xdef" });
   });
 
