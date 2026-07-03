@@ -75,20 +75,44 @@ export function createServer(
   const provider: VerifyDepositProvider | null = primaryClient
     ? {
         getTransactionReceipt: async (args) => {
-          // Fan out to every configured RPC in parallel and take the first
-          // non-null receipt. Per-client transport errors are swallowed —
-          // a slow/dead RPC shouldn't sink the request, the other clients
-          // (and the fallback transport chain in primaryClient) cover it.
+          // TEMP DIAG 2026-07-03: log every receipt query so we can
+          // measure how often each RPC wins in production (the parallel
+          // multi-RPC setup makes it non-obvious without instrumentation).
           const allClients = [primaryClient, ...extraClients];
-          const tries = await Promise.allSettled(
-            allClients.map((c) => c.getTransactionReceipt(args)),
+          console.log(
+            `[HexArena:server:rpc] getTransactionReceipt(${args.hash}) fanning to ${allClients.length} clients`,
           );
+          const start = Date.now();
+          const tries = await Promise.allSettled(
+            allClients.map(async (c, idx) => {
+              const clientStart = Date.now();
+              try {
+                const r = await c.getTransactionReceipt(args);
+                const elapsed = Date.now() - clientStart;
+                console.log(
+                  `[HexArena:server:rpc] client[${idx}] returned ${r ? "receipt" : "null"} in ${elapsed}ms`,
+                );
+                return r;
+              } catch (e) {
+                const elapsed = Date.now() - clientStart;
+                console.log(
+                  `[HexArena:server:rpc] client[${idx}] THREW after ${elapsed}ms: ${(e as Error).message}`,
+                );
+                throw e;
+              }
+            }),
+          );
+          const totalElapsed = Date.now() - start;
           for (const result of tries) {
             if (result.status === "fulfilled") {
               const r = result.value as MinimalReceipt | null;
-              if (r) return r;
+              if (r) {
+                console.log(`[HexArena:server:rpc] served from cache, total ${totalElapsed}ms`);
+                return r;
+              }
             }
           }
+          console.log(`[HexArena:server:rpc] all clients returned null after ${totalElapsed}ms`);
           return null;
         },
       }
@@ -96,6 +120,12 @@ export function createServer(
 
   // HTTP request dispatcher — single hand-off point for all REST endpoints.
   httpServer.on("request", async (req, res) => {
+    // TEMP DIAG 2026-07-03: log every request so we can confirm the
+    // dispatch is firing and identify where traffic gets stuck when
+    // Railway reports the container as Online but HTTP responses hang.
+    console.log(
+      `[HexArena:server:req] ${req.method} ${req.url} from ${req.headers["x-forwarded-for"] ?? "unknown"}`,
+    );
     const url = new URL(req.url ?? "", "http://localhost");
     const corsOrigin: string | "*" = opts.corsOrigin ?? "*";
     const corsHeaders: Record<string, string | string[] | undefined> = {};

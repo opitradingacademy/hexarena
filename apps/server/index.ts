@@ -13,14 +13,25 @@ const store = new MemoryLedgerStore();
 // forno.celo.org for new transactions, which is what /api/deposit depends
 // on to confirm the receipt in time. Fall back to forno.celo.org if the
 // operator doesn't override CELO_MAINNET_RPC_URL.
+//
+// Production 2026-07-03: viem's default `http()` transport has no
+// per-request timeout cap, and `fallback()` chains up to 3 retries
+// per transport with exponential backoff. That means a single
+// hung RPC could stall a /api/deposit request for >5 minutes —
+// longer than the entire event loop can absorb without external
+// requests piling up. Cap each transport at 4 seconds so the worst
+// case per poll is bounded.
 const rpcUrl = process.env.CELO_MAINNET_RPC_URL ?? "https://celo-rpc.publicnode.com";
 const publicClient = createPublicClient({
   chain: celo,
-  transport: fallback([
-    http("https://celo-rpc.publicnode.com"),
-    http("https://forno.celo.org"),
-    http(rpcUrl),
-  ]),
+  transport: fallback(
+    [
+      http("https://celo-rpc.publicnode.com", { timeout: 4_000 }),
+      http("https://forno.celo.org", { timeout: 4_000 }),
+      http(rpcUrl, { timeout: 4_000 }),
+    ],
+    { retryCount: 1 },
+  ),
 });
 
 // Explicit second public client for forno so it runs IN PARALLEL with
@@ -33,7 +44,7 @@ const publicClient = createPublicClient({
 // happens to be slowest on a given day.
 const fornoClient = createPublicClient({
   chain: celo,
-  transport: http("https://forno.celo.org"),
+  transport: http("https://forno.celo.org", { timeout: 4_000 }),
 });
 
 // Fail loud at boot if the treasury env is missing or malformed. We
