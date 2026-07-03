@@ -6,7 +6,7 @@ import type { GameMode } from "@hexarena/shared/protocol";
 import { StakeSelector } from "../../components/StakeSelector";
 import { StakeConfirmDialog } from "../../components/StakeConfirmDialog";
 import { getSocket } from "../../lib/socketSingleton";
-import { useUsdtBalance } from "../../lib/useUsdtBalance";
+import { useServerLedger } from "../../lib/useServerLedger";
 import { getWalletAddress } from "../../lib/wallet";
 import { waitForEthereum } from "../../lib/waitForEthereum";
 import { getArenaTreasuryAddress, getDepositUrl } from "../../lib/serverUrl";
@@ -30,7 +30,9 @@ export default function MatchmakingPage() {
 function MatchmakingScreen() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { balance: balanceUSD, reload: reloadBalance } = useUsdtBalance();
+  const { balance: balanceUSD, refresh: refreshBalance } = useServerLedger(
+    process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:3001",
+  );
   const [mode, setMode] = useState<GameMode>(
     searchParams.get("mode") === "arena" ? "ARENA" : "CASUAL",
   );
@@ -50,8 +52,30 @@ function MatchmakingScreen() {
         )}`,
       );
     }
-    function onError(payload: { code: string; msg?: string }) {
+    async function onError(payload: { code: string; msg?: string }) {
       if (payload.code === "INSUFFICIENT_BALANCE") {
+        // Production 2026-07-03 fix: before forcing the user back
+        // into the deposit modal, refresh the SERVER ledger view.
+        // The server's `join_queue` rejects on its own ledger
+        // (balanceOf(store, userId)), not the on-chain wallet — and
+        // this client's previous view of that number lagged the
+        // server (the previous useUsdtBalance hook read via
+        // eth_call, which can be ahead of the server's polling
+        // result). After the refresh:
+        //   - if the server ledger DOES cover the stake (the modal-
+        //     loop case where the deposit tx already landed in the
+        //     ledger but the client's cached balance was 0), retry
+        //     join_queue without opening the modal. No fresh tx
+        //     needed.
+        //   - only if the server ledger still doesn't cover the
+        //     stake do we open the deposit modal.
+        const fresh = await refreshBalance();
+        if (mode === "ARENA" && stake != null && fresh >= stake) {
+          setServerError(null);
+          setStatus("searching");
+          socket.emit("join_queue", { mode: "ARENA", stake });
+          return;
+        }
         setDepositOpen(true);
         setServerError(payload.msg ?? "Insufficient balance — deposit stake first");
         setStatus("idle");
@@ -63,16 +87,9 @@ function MatchmakingScreen() {
       socket.off("match_found", onMatchFound);
       socket.off("error", onError as never);
     };
-  }, [router]);
+  }, [router, refreshBalance]);
 
   function handleSearch() {
-    // Both modes try join_queue directly first — the server already
-    // knows how to check ledger.available >= stake (design.md:42) and
-    // rejects with INSUFFICIENT_BALANCE when it doesn't. Only that
-    // rejection (handled in onError above) should open the deposit
-    // dialog; opening it unconditionally here would force a fresh
-    // on-chain deposit every time, ignoring stake balance the user
-    // already has credited from a previous deposit.
     if (mode === "ARENA" && stake == null) return;
     setServerError(null);
     setStatus("searching");
@@ -90,9 +107,9 @@ function MatchmakingScreen() {
   async function handleStakeConfirmed() {
     setDepositOpen(false);
     setStatus("searching");
-    // Refresh the local ledger view so the server's balanceOf check sees
-    // the freshly-credited deposit on the next join_queue.
-    reloadBalance();
+    // Refresh the server ledger view so the server's balanceOf check
+    // sees the freshly-credited deposit on the next join_queue.
+    void refreshBalance();
     getSocket().emit("join_queue", { mode: "ARENA", stake: stake ?? 0 });
   }
 
