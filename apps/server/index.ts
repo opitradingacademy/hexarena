@@ -1,13 +1,52 @@
 import { createServer as createHttpServer } from "node:http";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { createPublicClient, fallback, http } from "viem";
 import { celo } from "viem/chains";
 import { SETTLEMENT_TOKEN_ADDRESS } from "@hexarena/shared/chain";
 import { createServer } from "./server";
 import { MemoryLedgerStore } from "./ledger/memoryStore";
+import { SqliteLedgerStore } from "./ledger/sqliteStore";
 import { validateTreasuryAddress } from "./indexEnv";
 
 const httpServer = createHttpServer();
-const store = new MemoryLedgerStore();
+
+// Production 2026-07-03 fix: the in-memory store wiped every credited
+// balance on each Railway redeploy, which drove the modal-loop (every
+// new tx signed by the user was being treated as the FIRST deposit,
+// because the server "forgot" the earlier ones). Switch to SQLite
+// behind the same LedgerStore interface; only the boot path changes.
+//
+// To enable persistence across deploys, set SQLITE_PATH to a path on
+// a persistent Railway volume (e.g. /data/hexarena.db if you mount a
+// volume at /data). The default /tmp/hexarena.db IS writable but
+// ephemeral — it survives the lifetime of a container but is wiped on
+// every redeploy. Once a Railway Pro volume is configured, set the
+// env var and the migration story is just "point at a path".
+const sqlitePath = process.env.SQLITE_PATH ?? "/tmp/hexarena.db";
+let store;
+if (process.env.LEDGER_BACKEND === "memory") {
+  store = new MemoryLedgerStore();
+  console.log("using in-memory ledger (LEDGER_BACKEND=memory)");
+} else if (existsSync(dirname(sqlitePath)) || canCreateDir(dirname(sqlitePath))) {
+  store = new SqliteLedgerStore(sqlitePath);
+  console.log(`using sqlite ledger at ${sqlitePath}`);
+} else {
+  console.log(
+    `cannot write to ${dirname(sqlitePath)}, falling back to memory ` +
+      `ledger. set LEDGER_BACKEND=memory to silence this.`,
+  );
+  store = new MemoryLedgerStore();
+}
+
+function canCreateDir(path: string): boolean {
+  try {
+    mkdirSync(path, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // PublicNode's Celo RPC has consistently lower propagation latency than
 // forno.celo.org for new transactions, which is what /api/deposit depends
