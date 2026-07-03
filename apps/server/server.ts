@@ -143,11 +143,18 @@ export function createServer(
 
     // POST /api/deposit — credit ledger with on-chain USDT transfer (see
     // depositEndpoint.ts NatSpec for the full contract).
-    if (url.pathname === "/api/deposit") {
-      // Without a provider the server can't validate receipts — fail
-      // loud rather than silently 500ing every request. Production
-      // always wires one via index.ts.
-      if (!provider) {
+    // GET  /api/balance?wallet=<addr> — read ledger balance.
+    // Both routes are owned by handleDepositRequest, which decides
+    // itself which path/verb it services. The router MUST call it for
+    // every recognized path that handleDepositRequest can handle — the
+    // inline /api/deposit-only call here is what made /api/balance a
+    // silent 502 in production 2026-07-03.
+    if (url.pathname === "/api/deposit" || url.pathname === "/api/balance") {
+      // Without a provider the server can still serve /api/balance
+      // (it's a pure read off the in-memory ledger). /api/deposit
+      // without a provider is a no-go — return 503 NO_RPC so the
+      // operator sees a clear signal that creation is misconfigured.
+      if (!provider && url.pathname === "/api/deposit") {
         res.writeHead(503, { "Content-Type": "application/json", ...corsHeaders });
         res.end(JSON.stringify({ ok: false, code: "NO_RPC" }));
         return;
@@ -155,7 +162,13 @@ export function createServer(
       await handleDepositRequest(req, res, store, {
         treasury: opts.treasuryAddress,
         tokenAddress: opts.tokenAddress,
-        provider,
+        // Without a provider, /api/balance still works (no RPC needed).
+        // Pass an inert stub that returns null so /api/deposit fails
+        // fast inside the handler rather than crashing on provider
+        // access.
+        provider: provider ?? {
+          getTransactionReceipt: async () => null as never,
+        },
         settleTokenDecimals: 6,
       });
       return;
