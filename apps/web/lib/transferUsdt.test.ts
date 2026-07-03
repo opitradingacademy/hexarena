@@ -8,12 +8,9 @@ const FROM = "0x2222222222222222222222222222222222222222" as const;
 describe("encodeUsdtTransfer", () => {
   it("encodes transfer(address,uint256) with the right selector + padded args", () => {
     const data = encodeUsdtTransfer({ to: TREASURY, amountRaw: 100_000n });
-    const hex = data.slice(2); // drop 0x
-    // selector = 8 hex chars
+    const hex = data.slice(2);
     expect(hex.slice(0, 8)).toBe("a9059cbb");
-    // next 64 hex chars = treasury address, left-padded
     expect(hex.slice(8, 72)).toBe("0".repeat(24) + TREASURY.slice(2).toLowerCase());
-    // last 64 hex chars = amount (big-endian)
     expect(BigInt("0x" + hex.slice(72))).toBe(100_000n);
   });
 
@@ -24,69 +21,79 @@ describe("encodeUsdtTransfer", () => {
   });
 });
 
-describe("submitUsdtTransfer", () => {
-  it("sends an eth_sendTransaction via the injected provider with feeCurrency + CIP-64 type", async () => {
+describe("submitUsdtTransfer (MiniPay legacy tx, type 0)", () => {
+  function providerWithGasPrice(
+    requestImpl: (args: { method: string; params?: unknown[] }) => Promise<unknown>,
+  ) {
+    return { request: requestImpl };
+  }
+
+  it("sends a legacy eth_sendTransaction (type: 0) with explicit gasPrice", async () => {
     const txHash = "0x" + "ab".repeat(32);
-    const request = vi.fn().mockResolvedValue(txHash);
-    const ethereum = { request };
+    const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+      if (method === "eth_gasPrice") return Promise.resolve("0x4a817c800"); // 20 gwei
+      if (method === "eth_sendTransaction") return Promise.resolve(txHash);
+      throw new Error("unreachable: " + method);
+    });
     const result = await submitUsdtTransfer({
-      ethereum,
+      ethereum: providerWithGasPrice(request) as never,
       from: FROM,
       to: TREASURY,
       amountUSD: 0.1,
     });
     expect(result).toBe(txHash);
-    const call = request.mock.calls[0]?.[0];
-    expect(call.method).toBe("eth_sendTransaction");
-    const params = call.params[0];
+
+    // Find the eth_sendTransaction call (after eth_gasPrice)
+    const txCall = request.mock.calls.find((c) => c[0].method === "eth_sendTransaction")?.[0];
+    expect(txCall).toBeDefined();
+    const params = txCall!.params[0];
+
+    // Critical for MiniPay: type 0 (legacy) is what MiniPay accepts.
+    // docs.minipay.xyz + the working reference app confirm:
+    //   "Every contract write uses type: 0 with explicit gasPrice."
+    // The Celo doc's 'type: 0x7b' CIP-64 advice applies to non-MiniPay
+    // clients; MiniPay's WebView provider-stub rejects 0x7b txs
+    // with bare 'execution reverted'.
+    expect(params.type).toBe(0);
+    expect(params.gasPrice).toBe("0x4a817c800");
     expect(params.from).toBe(FROM);
     expect(params.to.toLowerCase()).toBe(USDT.toLowerCase());
     expect(params.data.startsWith("0xa9059cbb")).toBe(true);
-    // Critical: feeCurrency must be the USDT adapter (CIP-64). Otherwise
-    // eth_estimateGas in the MiniPay provider-stub reverts with bare
-    // "execution reverted".
-    expect(params.feeCurrency.toLowerCase()).toBe("0x0e2a3e05bc9a16f5292a6170456a710cb89c6f72");
-    // Critical: CIP-64 transaction type 0x7b is required on Celo for any tx
-    // that uses feeCurrency. Without it the chain falls back to legacy
-    // type 0 and silently drops feeCurrency, making gas unpayable.
-    expect(params.type).toBe("0x7b");
-  });
 
-  it("does NOT include maxFeePerGas / maxPriorityFeePerGas (MiniPay is legacy only)", async () => {
-    const request = vi.fn().mockResolvedValue("0x" + "ab".repeat(32));
-    await submitUsdtTransfer({
-      ethereum: { request },
-      from: FROM,
-      to: TREASURY,
-      amountUSD: 0.1,
-    });
-    const txParams = request.mock.calls[0][0].params[0];
-    expect(txParams.maxFeePerGas).toBeUndefined();
-    expect(txParams.maxPriorityFeePerGas).toBeUndefined();
-    expect(txParams.gas).toBeUndefined(); // let provider estimate
+    // Critical: NO feeCurrency (MiniPay legacy pays gas in CELO).
+    expect(params.feeCurrency).toBeUndefined();
   });
 
   it("uses explicit raw amount when supplied (skipping USD conversion)", async () => {
-    const request = vi.fn().mockResolvedValue("0x" + "00".repeat(32));
+    const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+      if (method === "eth_gasPrice") return Promise.resolve("0x4a817c800");
+      if (method === "eth_sendTransaction") return Promise.resolve("0x" + "00".repeat(32));
+      throw new Error("unreachable");
+    });
     await submitUsdtTransfer({
-      ethereum: { request },
+      ethereum: providerWithGasPrice(request) as never,
       from: FROM,
       to: TREASURY,
       amountRaw: 250_000n,
     });
-    const data = request.mock.calls[0][0].params[0].data;
+    const txCall = request.mock.calls.find((c) => c[0].method === "eth_sendTransaction")?.[0];
+    const data = txCall!.params[0].data;
     expect(BigInt("0x" + data.slice(2).slice(-64))).toBe(250_000n);
   });
 
-  it("propagates provider rejection with the original error", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("User rejected"));
+  it("propagates provider rejection with a tagged error", async () => {
+    const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+      if (method === "eth_gasPrice") return Promise.resolve("0x4a817c800");
+      if (method === "eth_sendTransaction") return Promise.reject(new Error("User rejected"));
+      throw new Error("unreachable");
+    });
     await expect(
       submitUsdtTransfer({
-        ethereum: { request },
+        ethereum: providerWithGasPrice(request) as never,
         from: FROM,
         to: TREASURY,
         amountUSD: 0.1,
       }),
-    ).rejects.toThrow("User rejected");
+    ).rejects.toThrow(/submitUsdtTransfer reverted/);
   });
 });

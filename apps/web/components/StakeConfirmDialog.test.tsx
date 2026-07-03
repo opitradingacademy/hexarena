@@ -22,7 +22,11 @@ function setWindowEthereum(
 
 describe("StakeConfirmDialog", () => {
   beforeEach(() => {
-    setWindowEthereum(async () => TX_HASH);
+    setWindowEthereum(async ({ method }: { method: string }) => {
+      if (method === "eth_gasPrice") return Promise.resolve("0x4a817c800");
+      if (method === "eth_sendTransaction") return Promise.resolve(TX_HASH);
+      throw new Error("unreachable: " + method);
+    });
   });
 
   it("renders nothing when `open` is false", () => {
@@ -58,7 +62,11 @@ describe("StakeConfirmDialog", () => {
   });
 
   it("submits a USDT transfer, POSTs the txHash, and calls onSuccess", async () => {
-    setWindowEthereum(async () => TX_HASH);
+    setWindowEthereum(async ({ method }: { method: string }) => {
+      if (method === "eth_gasPrice") return Promise.resolve("0x4a817c800");
+      if (method === "eth_sendTransaction") return Promise.resolve(TX_HASH);
+      throw new Error("unreachable: " + method);
+    });
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ ok: true, balanceUSD: 0.1 }), {
         status: 200,
@@ -97,7 +105,11 @@ describe("StakeConfirmDialog", () => {
   });
 
   it("surfaces the server error when /api/deposit returns a non-200", async () => {
-    setWindowEthereum(async () => TX_HASH);
+    setWindowEthereum(async ({ method }: { method: string }) => {
+      if (method === "eth_gasPrice") return Promise.resolve("0x4a817c800");
+      if (method === "eth_sendTransaction") return Promise.resolve(TX_HASH);
+      throw new Error("unreachable: " + method);
+    });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ ok: false, code: "DUPLICATE_TX" }), {
         status: 409,
