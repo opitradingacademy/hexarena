@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { WalletWidget } from "../components/WalletWidget";
 import { ModeCard } from "../components/ModeCard";
 import { HistoryList, type HistoryEntry } from "../components/HistoryList";
 import { useIsMiniPay } from "../lib/useIsMiniPay";
@@ -66,14 +65,6 @@ export default function DashboardPage() {
         <span className="text-lg font-black uppercase tracking-widest text-arena-cyan">
           HexArena
         </span>
-        <WalletWidget
-          balanceUSD={balance}
-          loading={loading}
-          onAddFunds={() => {
-            setDepositOpen(true);
-            setStep("select");
-          }}
-        />
       </nav>
 
       {!isMiniPay && (
