@@ -15,7 +15,7 @@ import { balanceOf } from "./ledger/ledger";
 import { Matchmaker, type QueueEntry } from "./matchmaking";
 import { MatchSession } from "./matchSession";
 import { handleDepositRequest } from "./depositEndpoint";
-import type { VerifyDepositProvider } from "./chain/verifyDeposit";
+import type { VerifyDepositProvider, MinimalReceipt } from "./chain/verifyDeposit";
 import { applyCorsHeaders } from "./cors";
 
 /**
@@ -44,7 +44,10 @@ export function createServer(httpServer: HttpServer, store: LedgerStore, opts: C
   });
 
   const provider: VerifyDepositProvider = {
-    getTransactionReceipt: (args) => opts.publicClient.getTransactionReceipt(args),
+    getTransactionReceipt: async (args) => {
+      const r = await opts.publicClient.getTransactionReceipt(args);
+      return r as unknown as MinimalReceipt | null;
+    },
   };
 
   // HTTP request dispatcher — single hand-off point for all REST endpoints.
