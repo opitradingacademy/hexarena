@@ -8,11 +8,12 @@ import type { VerifyDepositProvider } from "./chain/verifyDeposit";
 
 const TREASURY = "0x1111111111111111111111111111111111111111" as const;
 const SENDER = "0x2222222222222222222222222222222222222222" as const;
+const TOKEN = "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e" as const;
 const TX_HASH = ("0x" + "ab".repeat(32)) as `0x${string}`;
 
 function encodedTransferLog(to: string, amount: bigint) {
   return {
-    address: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+    address: TOKEN,
     topics: [
       "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
       "0x000000000000000000000000" + SENDER.slice(2).toLowerCase(),
@@ -22,11 +23,14 @@ function encodedTransferLog(to: string, amount: bigint) {
   };
 }
 
+// Real ERC-20 `transfer()` receipts have `to` set to the TOKEN CONTRACT
+// (what you called), never the recipient — the recipient only shows up
+// inside the Transfer event log, which defaults to TREASURY below.
 function makeProvider(amount: bigint, recipient: string = TREASURY): VerifyDepositProvider {
   return {
     getTransactionReceipt: vi.fn().mockResolvedValue({
       status: "success",
-      to: recipient,
+      to: TOKEN,
       from: SENDER,
       logs: [encodedTransferLog(recipient, amount)],
     }),
@@ -65,6 +69,7 @@ async function withServer<T>(
   http.on("request", (req, res) => {
     handleDepositRequest(req, res, store, {
       treasury: TREASURY,
+      tokenAddress: TOKEN,
       provider,
       settleTokenDecimals: 6,
     }).catch((e) => {
@@ -94,6 +99,7 @@ async function withCustomProvider<T>(
   http.on("request", (req, res) => {
     handleDepositRequest(req, res, store, {
       treasury: TREASURY,
+      tokenAddress: TOKEN,
       provider,
       pollIntervalMs: 0,
       maxAttempts: 1,
@@ -202,7 +208,7 @@ describe("POST /api/deposit", () => {
     // polling needed because the receipt already arrived.
     const receipt = {
       status: "success",
-      to: TREASURY,
+      to: TOKEN,
       from: SENDER,
       blockHash: "0x" + "11".repeat(32),
       blockNumber: "0x64", // hex strings — what viem actually returns in JSON
@@ -212,7 +218,7 @@ describe("POST /api/deposit", () => {
       gasUsed: "0x0",
       logs: [
         {
-          address: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+          address: TOKEN,
           topics: [
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
             "0x000000000000000000000000" + SENDER.slice(2).toLowerCase(),
@@ -250,7 +256,45 @@ describe("POST /api/deposit", () => {
     );
   });
 
-  it("returns 422 when the receipt's recipient is not the treasury", async () => {
+  it("returns 422 when the receipt has no matching Transfer event to the treasury", async () => {
+    const receipt = {
+      status: "success",
+      to: TOKEN,
+      from: SENDER,
+      blockHash: "0x" + "11".repeat(32),
+      blockNumber: "0x64",
+      contractAddress: null,
+      cumulativeGasUsed: "0x0",
+      effectiveGasPrice: "0x0",
+      gasUsed: "0x0",
+      logs: [],
+      logsBloom: "0x",
+      transactionHash: TX_HASH,
+      transactionIndex: "0x0",
+      type: "0x2",
+    };
+    const provider: VerifyDepositProvider = {
+      getTransactionReceipt: vi.fn().mockResolvedValue(receipt),
+    };
+    await withCustomProvider(
+      provider,
+      () => {},
+      async (port) => {
+        const { status, body } = await fetchJson(`http://127.0.0.1:${port}/api/deposit`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-wallet-address": SENDER,
+          },
+          body: JSON.stringify({ txHash: TX_HASH, receipt }),
+        });
+        expect(status).toBe(422);
+        expect(body.code).toBe("INVALID_TX");
+      },
+    );
+  });
+
+  it("returns 422 when the tx wasn't sent to the settlement token contract", async () => {
     const receipt = {
       status: "success",
       to: "0xdead000000000000000000000000000000000000",

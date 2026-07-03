@@ -1,6 +1,7 @@
 import { createServer as createHttpServer } from "node:http";
 import { createPublicClient, fallback, http } from "viem";
 import { celo } from "viem/chains";
+import { SETTLEMENT_TOKEN_ADDRESS } from "@hexarena/shared/chain";
 import { createServer } from "./server";
 import { MemoryLedgerStore } from "./ledger/memoryStore";
 import { validateTreasuryAddress } from "./indexEnv";
@@ -29,8 +30,14 @@ const publicClient = createPublicClient({
 // for hours.
 const treasuryAddress = validateTreasuryAddress(process.env.ARENA_TREASURY_ADDRESS ?? "");
 
+const tokenAddress = SETTLEMENT_TOKEN_ADDRESS[42220];
+if (!tokenAddress) {
+  throw new Error("No settlement token configured for chain 42220 (Celo Mainnet)");
+}
+
 createServer(httpServer, store, {
   treasuryAddress,
+  tokenAddress,
   publicClient,
   corsOrigin: process.env.ARENA_CORS_ORIGIN ?? "https://web-taupe-alpha-23.vercel.app",
 });

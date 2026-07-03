@@ -28,6 +28,8 @@ type CeloPublicClient = Pick<PublicClient, "getTransactionReceipt">;
 export type CreateServerOpts = {
   /** Treasury address that receives user Arena stakes. Required for /api/deposit. */
   treasuryAddress: `0x${string}`;
+  /** Settlement token contract address (e.g. USDT on Celo Mainnet). Required for /api/deposit. */
+  tokenAddress: `0x${string}`;
   /** viem public client for reading tx receipts. Required for /api/deposit. */
   publicClient: CeloPublicClient;
   /**
@@ -72,6 +74,7 @@ export function createServer(httpServer: HttpServer, store: LedgerStore, opts: C
     if (url.pathname === "/api/deposit") {
       await handleDepositRequest(req, res, store, {
         treasury: opts.treasuryAddress,
+        tokenAddress: opts.tokenAddress,
         provider,
         settleTokenDecimals: 6,
       });

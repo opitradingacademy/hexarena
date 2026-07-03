@@ -45,6 +45,8 @@ import { applyCorsHeaders } from "./cors";
 
 export type DepositEndpointConfig = {
   treasury: `0x${string}`;
+  /** Settlement token contract address (e.g. USDT on Celo Mainnet). */
+  tokenAddress: `0x${string}`;
   provider: VerifyDepositProvider;
   /** Default 6 (USDT). Used to convert raw on-chain units to USD. */
   settleTokenDecimals?: number;
@@ -76,19 +78,28 @@ function eqAddr(a: string, b: string): boolean {
 function validateClientReceipt(
   receipt: MinimalReceipt,
   treasury: `0x${string}`,
+  tokenAddress: `0x${string}`,
 ): { ok: true; amount: bigint; from: `0x${string}` } {
   if (receipt.status !== "success") {
     throw new InvalidTransactionError("receipt status is not success");
   }
-  if (!receipt.to || !eqAddr(receipt.to, treasury)) {
-    throw new WrongRecipientError();
+  // A `transfer()` receipt's `to` is always the token CONTRACT you
+  // called (e.g. the USDT address), never the recipient — the recipient
+  // only shows up inside the Transfer event log below. Comparing `to`
+  // against the treasury here was a bug: it can never match a real
+  // ERC-20 transfer receipt.
+  if (!receipt.to || !eqAddr(receipt.to, tokenAddress)) {
+    throw new InvalidTransactionError("transaction was not sent to the settlement token contract");
   }
   const paddedTreasury = pad32(treasury);
   const matchingLog = receipt.logs.find(
-    (log) => log.topics[0] === TRANSFER_TOPIC && log.topics[2] === paddedTreasury,
+    (log) =>
+      eqAddr(log.address, tokenAddress) &&
+      log.topics[0] === TRANSFER_TOPIC &&
+      log.topics[2] === paddedTreasury,
   );
   if (!matchingLog) {
-    throw new InvalidTransactionError("no matching Transfer event to treasury");
+    throw new WrongRecipientError();
   }
   return {
     ok: true,
@@ -159,7 +170,7 @@ export async function handleDepositRequest(
     if (body.receipt) {
       // Fast path: the client already fetched the receipt via its own
       // MiniPay provider-stub. Validate structurally without RPC fetch.
-      const verified = validateClientReceipt(body.receipt, config.treasury);
+      const verified = validateClientReceipt(body.receipt, config.treasury, config.tokenAddress);
       amount = verified.amount;
     } else {
       // Slow path: poll the configured public RPC. Used as a safety net
@@ -167,6 +178,7 @@ export async function handleDepositRequest(
       const verified = await verifyDeposit({
         txHash,
         treasury: config.treasury,
+        tokenAddress: config.tokenAddress,
         seenTxHashes: new Set<string>(),
         provider: config.provider,
         pollIntervalMs: config.pollIntervalMs,

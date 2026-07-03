@@ -35,6 +35,15 @@ export type VerifyDepositArgs = {
   txHash: `0x${string}`;
   /** 0x-prefixed lower/upper-case treasury address (case-insensitive). */
   treasury: `0x${string}`;
+  /**
+   * Settlement token contract address (e.g. USDT on Celo Mainnet). A
+   * `transfer()` receipt's `to` field is always the CONTRACT you called,
+   * never the recipient — that only appears inside the Transfer event
+   * log. Required to (a) confirm the call really hit the real token
+   * contract and (b) reject a spoofed Transfer log emitted by some other
+   * contract.
+   */
+  tokenAddress: `0x${string}`;
   /** Pre-populated set of tx hashes already credited (for idempotency). */
   seenTxHashes: ReadonlySet<string>;
   provider: VerifyDepositProvider;
@@ -120,16 +129,19 @@ export async function verifyDeposit(args: VerifyDepositArgs): Promise<{
   if (!receipt || receipt.status !== "success") {
     throw new InvalidTransactionError("receipt not found or not successful");
   }
-  if (!receipt.to || !eqAddr(receipt.to, args.treasury)) {
-    throw new WrongRecipientError();
+  if (!receipt.to || !eqAddr(receipt.to, args.tokenAddress)) {
+    throw new InvalidTransactionError("transaction was not sent to the settlement token contract");
   }
 
   const paddedTreasury = pad32(args.treasury);
   const matchingLog = receipt.logs.find(
-    (log) => log.topics[0] === TRANSFER_TOPIC && log.topics[2] === paddedTreasury,
+    (log) =>
+      eqAddr(log.address, args.tokenAddress) &&
+      log.topics[0] === TRANSFER_TOPIC &&
+      log.topics[2] === paddedTreasury,
   );
   if (!matchingLog) {
-    throw new InvalidTransactionError("no matching Transfer event to treasury");
+    throw new WrongRecipientError();
   }
   const amount = BigInt(matchingLog.data);
   if (args.minAmountRaw !== undefined && amount < args.minAmountRaw) {
