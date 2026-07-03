@@ -102,7 +102,6 @@ export async function submitUsdtTransfer(args: {
     data,
     feeCurrency,
   };
-  console.log("[HexArena:txParams]", JSON.stringify(txParams, null, 2));
   try {
     const txHash = (await args.ethereum.request({
       method: "eth_sendTransaction",
@@ -111,7 +110,6 @@ export async function submitUsdtTransfer(args: {
     return txHash;
   } catch (e) {
     const err = e as Error & { code?: number; data?: unknown };
-    console.log("[HexArena:txError]", err);
     const detail = err.data ?? err.message ?? "unknown error";
     throw new Error(
       `submitUsdtTransfer reverted: code=${err.code ?? "?"} ` +
