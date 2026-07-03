@@ -214,5 +214,38 @@ describe("verifyDeposit", () => {
       ).rejects.toBeInstanceOf(InvalidTransactionError);
       expect(request).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
     });
+
+    it("uses the production defaults of 2000ms × 20 attempts (~40s budget)", () => {
+      // Pure type/unit check: the default constants live in verifyDeposit
+      // and are consumed by depositEndpoint.ts when no overrides are
+      // passed. Production log 2026-07-03 showed several cases where
+      // the receipt didn't propagate to publicNode within the previous
+      // 15s budget — the wider window is what unblocks the modal-loop
+      // without re-signing the tx. If this test ever fails with new
+      // numbers, that's intentional and the docs above should be
+      // updated too.
+      const request = vi.fn().mockResolvedValue(null);
+      const start = Date.now();
+      return verifyDeposit({
+        txHash: TX_HASH,
+        treasury: TREASURY,
+        tokenAddress: TOKEN,
+        seenTxHashes: new Set<string>(),
+        provider: { getTransactionReceipt: request },
+        // No pollIntervalMs / maxAttempts overrides — must use defaults.
+      }).catch((err) => {
+        const elapsed = Date.now() - start;
+        // Allow generous slack for CI scheduling jitter. The point is
+        // to confirm the budget is wide enough that production sees
+        // some polls before failure, not to assert exact timing.
+        expect(request).toHaveBeenCalledTimes(21); // 1 initial + 20 retries
+        // Total wall-clock must include at least 20 × 2000ms = 40s of
+        // polls minus setTimeout slack. We assert >= 30s to allow for
+        // setup overhead but still catch the regression of reverting
+        // to the old 15s budget.
+        expect(elapsed).toBeGreaterThanOrEqual(30_000);
+        expect(err).toBeInstanceOf(InvalidTransactionError);
+      });
+    }, 50_000);
   });
 });

@@ -51,13 +51,22 @@ export type VerifyDepositArgs = {
   minAmountRaw?: bigint;
   /**
    * Polling delay between getTransactionReceipt retries when the first
-   * call returns null. Default 1500ms — Celo Mainnet finalises a tx in
+   * call returns null. Default 2000ms — Celo Mainnet finalises a tx in
    * ~1 block (~1s) but a freshly broadcast tx can take up to a few
-   * seconds to show up in the public RPC's mempool view. Higher than
-   * the block time to be safe.
+   * seconds to show up in the public RPC's mempool view. Bumped from
+   * 1500ms (2026-07-03) — production showed several cases where the
+   * receipt didn't propagate to publicNode for >10s after the tx was
+   * already visible on-chain. Slower polls leave more wall-clock
+   * budget before the timeout fires.
    */
   pollIntervalMs?: number;
-  /** Max retry attempts after the initial receipt fetch. Default 10. */
+  /**
+   * Max retry attempts after the initial receipt fetch. Default 20
+   * (was 10 — bumped 2026-07-03 for the same reason as pollIntervalMs).
+   * At 2000ms each that's 40s of total polling budget. Production logs
+   * showed the chain-side confirm happened within ~30s; widening the
+   * budget is what unblocks the modal-loop without re-signing the tx.
+   */
   maxAttempts?: number;
 };
 
@@ -122,8 +131,8 @@ export async function verifyDeposit(args: VerifyDepositArgs): Promise<{
   // Idempotency (`seenTxHashes`) is the caller's responsibility. The
   // HTTP handler uses store.findDeposit(txHash) before calling us so a
   // re-POST returns 409 without fetching the receipt.
-  const pollIntervalMs = args.pollIntervalMs ?? 1500;
-  const maxAttempts = args.maxAttempts ?? 10;
+  const pollIntervalMs = args.pollIntervalMs ?? 2000;
+  const maxAttempts = args.maxAttempts ?? 20;
 
   // Poll getTransactionReceipt until the tx is mined. The first call
   // frequently returns null when the tx has been signed and broadcast

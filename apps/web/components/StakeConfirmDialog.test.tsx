@@ -158,6 +158,60 @@ describe("StakeConfirmDialog", () => {
     expect(screen.getByTestId("stake-error").textContent).toMatch(/Deposit failed/);
   });
 
+  it("surfaces the server error code so device users can see why the deposit is stuck", async () => {
+    // Real on-device production case 2026-07-03: the local receipt
+    // fetch throws (handled by delegating to server slow path), then the
+    // server's polling budget expires before the public RPC sees the
+    // tx — the server returns 500 with code=RPC_ERROR. The modal must
+    // show that code (not just a generic "Deposit failed") so the user
+    // can trust that Retry will reuse the same txHash and not
+    // double-charge. This is the signal that drove the modal-loop bug.
+    setViemProvider();
+    Object.defineProperty(window, "ethereum", {
+      value: {
+        request: vi.fn().mockImplementation(async ({ method }: { method: string }) => {
+          if (method === "eth_chainId") return "0xa4ec";
+          if (method === "eth_blockNumber") return "0x1";
+          if (method === "eth_requestAccounts") return [SENDER];
+          if (method === "eth_accounts") return [SENDER];
+          if (method === "eth_estimateGas") return "0x186a0";
+          if (method === "eth_sendTransaction") return TX_HASH;
+          if (method === "eth_getTransactionReceipt") {
+            throw new Error(`Transaction receipt with hash "${TX_HASH}" could not be found.`);
+          }
+          throw new Error("unreachable: " + method);
+        }),
+      },
+      configurable: true,
+      writable: true,
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          code: "RPC_ERROR",
+          msg: "receipt not found or not successful",
+        }),
+        { status: 500, headers: { "content-type": "application/json" } },
+      ),
+    );
+    render(
+      <StakeConfirmDialog
+        open
+        stakeUSD={0.1}
+        treasury={TREASURY}
+        senderAddress={SENDER}
+        depositServerUrl="https://example.test"
+        onClose={() => {}}
+        onSuccess={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("stake-confirm-button"));
+    await waitFor(() => expect(screen.getByTestId("stake-error")).toBeInTheDocument());
+    expect(screen.getByTestId("stake-error").textContent).toMatch(/RPC_ERROR/);
+    expect(screen.getByTestId("stake-error").textContent).toMatch(/Retry/);
+  });
+
   it("delegates to the server slow path when the local receipt fetch throws", async () => {
     // Reproduces the recurring production case in MiniPay: the user's
     // provider-stub throws TransactionReceiptNotFoundError even when the

@@ -233,9 +233,25 @@ export function StakeConfirmDialog({
           <div
             data-testid="stake-error"
             role="alert"
-            className="mt-4 rounded-xl border border-arena-magenta/60 bg-arena-magenta/10 p-3 text-sm text-arena-magenta"
+            className="mt-4 rounded-xl border border-arena-magenta/60 bg-arena-magenta/10 p-3 text-xs text-arena-magenta"
           >
+            {(status.kind === "server-error" || status.kind === "client-error") &&
+              status.kind === "server-error" && (
+                <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-arena-magenta/80">
+                  code: {status.code}
+                </div>
+              )}
             {errorMessage}
+            {/* For the RPC_ERROR case specifically — when the server polled
+                the public Celo RPC for up to 40s and didn't see the tx
+                yet — the tx IS already mined (the wallet shows the debit),
+                we just need to wait for the public RPC to catch up. Tell
+                the user that explicitly so they know Retry is safe and
+                likely to succeed. The same txHash is reused on Retry, so
+                no double-charge. */}
+            {status.kind === "server-error" &&
+              status.code === "RPC_ERROR" &&
+              " The deposit is queued — Retry will reuse the signed tx."}
           </div>
         )}
 
