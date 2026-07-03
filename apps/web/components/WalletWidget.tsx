@@ -3,13 +3,14 @@ import { formatUSD } from "../lib/formatUSD";
 export type WalletWidgetProps = {
   balanceUSD: number;
   loading?: boolean;
+  onAddFunds?: () => void;
 };
 
 /**
  * Dashboard top-nav wallet widget (design.md wireframe "1. Dashboard").
  * Copy rule: balance MUST be shown in USD only — never CELO/token/0x.
  */
-export function WalletWidget({ balanceUSD, loading = false }: WalletWidgetProps) {
+export function WalletWidget({ balanceUSD, loading = false, onAddFunds }: WalletWidgetProps) {
   if (loading) {
     return (
       <div
@@ -31,7 +32,8 @@ export function WalletWidget({ balanceUSD, loading = false }: WalletWidgetProps)
       </span>
       <button
         type="button"
-        className="rounded-full bg-arena-cyan/10 px-2 py-0.5 text-xs font-semibold text-arena-cyan"
+        onClick={onAddFunds}
+        className="rounded-full bg-arena-cyan/10 px-2 py-0.5 text-xs font-semibold text-arena-cyan transition hover:bg-arena-cyan/20"
       >
         Add funds
       </button>
