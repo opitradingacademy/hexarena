@@ -7,14 +7,23 @@ const SENDER = "0x2222222222222222222222222222222222222222" as const;
 const TREASURY = "0x1111111111111111111111111111111111111111" as const;
 const TX_HASH = "0x" + "ab".repeat(32);
 
-// Narrower type assertion than the global Window['ethereum']
-// declaration that lives elsewhere in the suite — we only need a
-// request shape for these dialog tests.
-function setWindowEthereum(
-  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>,
-) {
+// viem's createWalletClient + custom transport calls several RPC methods
+// before eth_sendTransaction: eth_chainId, eth_blockNumber,
+// eth_requestAccounts (sometimes), and on some paths eth_estimateGas.
+// We mock all of them so the success path lands on eth_sendTransaction.
+function setViemProvider() {
   Object.defineProperty(window, "ethereum", {
-    value: { request },
+    value: {
+      request: vi.fn().mockImplementation(async ({ method }: { method: string }) => {
+        if (method === "eth_chainId") return "0xa4ec"; // 42220
+        if (method === "eth_blockNumber") return "0x1";
+        if (method === "eth_requestAccounts") return [SENDER];
+        if (method === "eth_accounts") return [SENDER];
+        if (method === "eth_estimateGas") return "0x186a0"; // 100_000
+        if (method === "eth_sendTransaction") return TX_HASH;
+        throw new Error("unreachable: " + method);
+      }),
+    },
     configurable: true,
     writable: true,
   });
@@ -22,10 +31,7 @@ function setWindowEthereum(
 
 describe("StakeConfirmDialog", () => {
   beforeEach(() => {
-    setWindowEthereum(async ({ method }: { method: string }) => {
-      if (method === "eth_sendTransaction") return Promise.resolve(TX_HASH);
-      throw new Error("unreachable: " + method);
-    });
+    setViemProvider();
   });
 
   it("renders nothing when `open` is false", () => {
@@ -61,10 +67,6 @@ describe("StakeConfirmDialog", () => {
   });
 
   it("submits a USDT transfer, POSTs the txHash, and calls onSuccess", async () => {
-    setWindowEthereum(async ({ method }: { method: string }) => {
-      if (method === "eth_sendTransaction") return Promise.resolve(TX_HASH);
-      throw new Error("unreachable: " + method);
-    });
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ ok: true, balanceUSD: 0.1 }), {
         status: 200,
@@ -72,8 +74,6 @@ describe("StakeConfirmDialog", () => {
       }),
     );
     const onSuccess = vi.fn();
-    const onClose = vi.fn();
-
     render(
       <StakeConfirmDialog
         open
@@ -81,7 +81,7 @@ describe("StakeConfirmDialog", () => {
         treasury={TREASURY}
         senderAddress={SENDER}
         depositServerUrl="https://example.test"
-        onClose={onClose}
+        onClose={() => {}}
         onSuccess={onSuccess}
       />,
     );
@@ -103,10 +103,6 @@ describe("StakeConfirmDialog", () => {
   });
 
   it("surfaces the server error when /api/deposit returns a non-200", async () => {
-    setWindowEthereum(async ({ method }: { method: string }) => {
-      if (method === "eth_sendTransaction") return Promise.resolve(TX_HASH);
-      throw new Error("unreachable: " + method);
-    });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ ok: false, code: "DUPLICATE_TX" }), {
         status: 409,
@@ -130,8 +126,20 @@ describe("StakeConfirmDialog", () => {
   });
 
   it("surfaces the user rejection when they cancel the tx signing", async () => {
-    setWindowEthereum(async () => {
-      throw new Error("User rejected");
+    Object.defineProperty(window, "ethereum", {
+      value: {
+        request: vi.fn().mockImplementation(async ({ method }: { method: string }) => {
+          if (method === "eth_chainId") return "0xa4ec";
+          if (method === "eth_blockNumber") return "0x1";
+          if (method === "eth_requestAccounts") return [SENDER];
+          if (method === "eth_accounts") return [SENDER];
+          if (method === "eth_estimateGas") return "0x186a0";
+          if (method === "eth_sendTransaction") throw new Error("User rejected");
+          throw new Error("unreachable: " + method);
+        }),
+      },
+      configurable: true,
+      writable: true,
     });
     render(
       <StakeConfirmDialog

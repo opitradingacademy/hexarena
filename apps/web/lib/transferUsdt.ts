@@ -1,17 +1,14 @@
 import { FEE_CURRENCY_ADAPTER, SETTLEMENT_TOKEN_ADDRESS } from "@hexarena/shared/chain";
 
 /**
- * USDC has 6 decimals on Celo. USDm has 18. We default to 6 because the
- * ArenaSettlement contract on Mainnet is configured with USDT (6
- * decimals). Operators who switch settlement to USDm/USDC adapters must
- * override `settleTokenDecimals` here AND in their `ArenaSettlement`
- * constructor.
+ * USDT uses 6 decimals on Celo. USDm uses 18. We default to 6 because the
+ * ArenaSettlement contract on Mainnet is configured with USDT.
  */
 const DEFAULT_DECIMALS = 6;
 
 /**
- * EIP-1193 request surface, no-op fields ignored. Allows us to bind the
- * provider's .request() once and not depend on the global window shape.
+ * EIP-1193 request surface, used by the viem custom transport to
+ * talk to the injected MiniPay provider.
  */
 export type EthereumRequester = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -47,32 +44,21 @@ export function encodeUsdtTransfer(args: {
 }
 
 /**
- * Submits a USDT `transfer(to, amount)` from `from` through the injected
- * EIP-1193 provider. Returns the transaction hash once the user signs.
+ * Submits a USDT `transfer(to, amount)` via the injected MiniPay provider.
+ * Returns the transaction hash once the user signs.
  *
- * The MiniPay provider expects a Celo fee-abstraction transaction shaped
- * exactly as the docs.minipay.xyz Send Transaction example shows:
+ * Uses viem with a `custom(window.ethereum)` transport — the canonical
+ * pattern shown in docs.celo.org/build-on-celo/fee-abstraction/using-fee-abstraction.
  *
- *   {
- *     to: USDC_CONTRACT_ADDRESS,
- *     feeCurrency: USDC_ADAPTER,    // CIP-64 adapter, NOT token
- *     data,
- *   }
+ * Critical fields per Celo + MiniPay docs:
+ *   - `feeCurrency`: USDT adapter address (NOT the token address).
+ *     Set this and the chain debits gas in USDT; the user needs no CELO.
+ *   - `type: 'cip64'`: viem's abstract for CIP-64 type 0x7b. viem
+ *     serializes this to the byte-0x7b format the chain accepts.
  *
- * The provider figures out the rest (type, gas, etc.) internally. Setting
- * any of those fields ourselves is what makes the provider revert with
- * bare "execution reverted" — confirmed across 5 deploys. In particular:
- *
- *   - DO NOT set `type: 0` (legacy). zorritoclaude is correct about the
- *     WebView accepting legacy, but the user has no CELO in MiniPay, so
- *     legacy is unfundable. The provider must pick the type that matches
- *     feeCurrency.
- *   - DO NOT set `type: "0x7b"` (CIP-64). The provider rejects this
- *     when it sees feeCurrency paired with a type it didn't set.
- *   - DO NOT set `gasPrice` / `gas` / `maxFeePerGas`. Same reason.
- *
- * The user pays gas in USDT (the feeCurrency adapter debits USDT
- * directly), so the user only needs a positive USDT balance and no CELO.
+ * viem also handles `account`, `chain`, and `gas estimation` internally,
+ * so the `params[0]` shape of the underlying eth_sendTransaction call
+ * is built by viem and matches what the docs.celo.org example shows.
  */
 export async function submitUsdtTransfer(args: {
   ethereum: EthereumRequester;
@@ -96,18 +82,33 @@ export async function submitUsdtTransfer(args: {
   if (!feeCurrency) {
     throw new Error("No fee-currency adapter configured for chain 42220 (Celo Mainnet)");
   }
-  const txParams = {
-    from: args.from,
-    to: tokenAddress,
-    data,
-    feeCurrency,
-  };
+  // Lazy-load viem to keep the bundle out of the read path (Dashboard,
+  // useUsdtBalance) — viem is only required for tx submission in
+  // MatchmakingStakeDialog, which is rare on a given render.
+  const viem = await import("viem");
+  const { celo } = await import("viem/chains");
+  const transport = viem.custom({
+    async request({ method, params }) {
+      return args.ethereum.request({ method, params: params ?? [] });
+    },
+  });
+  const client = viem.createWalletClient({
+    account: args.from,
+    chain: celo,
+    transport,
+  });
   try {
-    const txHash = (await args.ethereum.request({
-      method: "eth_sendTransaction",
-      params: [txParams],
-    })) as `0x${string}`;
-    return txHash;
+    const txHash = await client.sendTransaction({
+      account: args.from,
+      to: tokenAddress,
+      data,
+      feeCurrency,
+      // viem's 'cip64' serializes to type 0x7b (CIP-64), the format
+      // Celo Mainnet accepts for feeCurrency transactions.
+      type: "cip64",
+      chain: celo,
+    });
+    return txHash as `0x${string}`;
   } catch (e) {
     const err = e as Error & { code?: number; data?: unknown };
     const detail = err.data ?? err.message ?? "unknown error";
