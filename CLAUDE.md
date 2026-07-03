@@ -1,6 +1,6 @@
 # HexArena
 
-Othello sobre tablero hexagonal para MiniPay (Celo). Ver `proyecto.md` para el GDD completo (visión de producto a largo plazo — no todo está en el MVP).
+Othello sobre tablero hexagonal para MiniPay (Celo). Ver `proyecto.md` para el GDD completo.
 
 ## Estado del proyecto
 
@@ -10,63 +10,77 @@ Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos
 - Estado del DAG: `openspec/changes/hexarena-mvp/state.yaml` — siempre revisar ahí antes de asumir qué fase sigue.
 - Progreso de implementación detallado: Engram, topic_key `sdd/hexarena-mvp/apply-progress`.
 
-**Al día de hoy (2026-07-03, fin de sesión de debugging nocturna)**: PR1-PR5 de 5 completados. Todo deployado y en producción. Operator treasury address real ya configurada (`0x34d5d015B4805E985619D0F4aaCb6343a6457fF2`, generada con `cast wallet new`, separada de la wallet del user) — verificada en Railway (`arena treasury:` en boot log) y confirmada on-chain en CeloScan que varios depósitos llegaron a esa dirección.
+**Al día de hoy (2026-07-03, cierre de sesión de debugging extendida):**
 
-**⚠️ Arena deposit flow: NO production-ready todavía.** Se encontraron y arreglaron 3 bugs reales esta sesión (ver "Bugs de deposit encontrados 2026-07-03" abajo), pero el usuario reporta que el último fix (recuperar el txHash del mensaje de error de viem cuando falla DENTRO de la firma) **sigue sin funcionar en device físico** — el modal se queda en Retry/Cancel, nunca llega a "Find match". Causa raíz exacta sin confirmar todavía. Retomar mañana con: (1) pedir al usuario un screenshot fresco del error tras el último deploy, (2) considerar que puede haber un CUARTO bug distinto, o que el regex de recuperación de hash no está matcheando el mensaje real, o que Vercel no terminó de propagar el build. Pendiente también: 2-device match pairing (sin tocar esta sesión).
+- PR1–PR5 completados, deployados en producción.
+- Operator treasury address real configurada en Railway: `0x34d5d015B4805E985619D0F4aaCb6343a6457fF2` (separada de la wallet del user).
+- 169/169 tests Vitest verde al cierre de cada PR; serie de fixes de esta sesión movió la suite a **186/186 verde**.
 
-**Fondos atascados en la treasury**: varias transacciones de prueba de esta sesión llegaron a `0x34d5d015B4805E985619D0F4aaCb6343a6457fF2` pero NO se acreditaron en el ledger (porque el cliente nunca completó el POST /api/deposit exitosamente en esos intentos). Recuperados a la wallet personal del usuario con `scripts/recover-treasury-funds.ts` — ver "Pendientes manuales" #5 (resuelto).
+### Estado del Arena deposit flow al cierre
 
-- Repo público: https://github.com/opitradingacademy/hexarena (rama `main`). Push requiere `bash scripts/push-with-token.sh main` (token en `.github-token`, gitignored — no hay credenciales persistentes en `git config`).
+**Causa raíz del modal-loop, finalmente identificada y arreglada en commit `7dd3c0c` (ver "Hallazgos críticos" abajo):**
+
+`socketSingleton.ts` cacheaba `walletAddress` SOLO en module-load. MiniPay inyecta `window.ethereum` asincrónicamente (evento `ethereum#initialized`); la primera lectura fallaba al module-load y quedaba en `undefined` para siempre. Cada socket reconnect mandaba `auth` sin wallet → server caía al fallback `socket.id` (que cambia cada reconnect) → el matchmaker evaluaba `balanceOf(store, $randomSocketId)` que siempre era 0 → tiraba `INSUFFICIENT_BALANCE` → el cliente reabría el modal. Curl `/api/balance` siempre devolvía el balance correcto (esa ruta NO depende del socket auth). Por eso los fixes de los días anteriores fallaban en parecer arreglar el problema.
+
+**El fix definitivo** (`7dd3c0c`): `getSocket()` ahora resuelve la wallet en cada `auth` callback. socket.io-client llama `auth` en cada reconnect, así que después del primer intento exitoso el `userId` se mantiene estable a `0x5288AcFd5c2371f880b4A2BBEE8aF647bD9a051b` (tu wallet MiniPay) y todos los join_queue evalúan el balance correcto.
+
+### Hallazgos críticos de esta sesión de debugging
+
+Cada uno es un bug real que hubiera roto el flow en device físico. Los 4 primeros síntomas son reales; solo el #5 es la causa raíz definitiva.
+
+1. **MiniPay `eth_getTransactionReceipt` returns null/throws** incluso para tx minadas, porque el provider-stub del WebView tiene una vista local atrasada del chain state. Cliente delega al server slow-path de 40s con multi-RPC polling. (commits `c1495c5`, `c8fe73c`)
+2. **Public RPC propagation lag** (publicNode/forno) de 2-30s para tx recién minadas. Server bypasses fallback-sequencial y hace poll paralelo contra múltiples RPCs (`primaryClient` + `fornoClient`). (commit `8774eba`)
+3. **`MemoryLedgerStore` perdía el balance en cada redeploy** de Railway. Reemplazado por `SqliteLedgerStore` con `better-sqlite3`. Default `/tmp/hexarena.db` (writable pero volátil); para persistencia real setear `SQLITE_PATH=/data/hexarena.db` con un volume montado. (commit `0ef5812`)
+4. **`Matchmaker.join()` matcheaba al user consigo mismo** cuando su entry anterior seguía en la queue (porque `cancel_queue` solo se dispara en user action, no en socket disconnect). Filtrar self-entries en el lookup. (commit `66a15e2`)
+5. **La causa raíz definitiva**: `socketSingleton.ts` cacheaba `walletAddress` en module-load — reescrito para resolverlo async en cada reconnect. (commit `7dd3c0c`)
+
+### Trabajo complementario de la sesión
+
+- **`GET /api/balance?wallet=<addr>`** nuevo endpoint para debugging del ledger del server desde afuera. (commit `45e4b86`)
+- **`useServerLedger` hook** en cliente lee el balance del server (no la wallet on-chain, que suele ser otro número). (commit `69c6313`)
+- **`Matchmaking` screen reescrito**: modal se auto-abre al tocar Find Match con balance insuficiente (sin mensaje de error visible); nunca reabre después de firmar gracias a `await refreshBalance()` antes de cualquier decisión. Chips de stake siempre clickeables (hint "Top up" si el balance no cubre). (commits `0a7baa1`, `430244e`)
+- **`scripts/recover-treasury-funds.ts`** recuperó ~$0.41 USDT de fondos atascados en `0x34d5d015...` desde que el server se reiniciaba y perdía los credits. Ejecutado en chunks chicos por un quirk del USDT de Celo (ver nota abajo). (commit `581b0ab`)
+
+### Quirk del USDT de Celo descubierto
+
+El token `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e` NO es el USDT real de Tether — es un wrapper no-estándar con un fee de transferencia embebido del **~1.5%** que va a un Community Fund (`0x000000000000000000000000000000000Ce106A5`) y rebatea ~13 raw al sender. Esto significa que cada stake de $0.10 que hace un user en Arena se queda con ~$0.0965 USDT neto.
+
+**Consecuencias prácticas**:
+
+- `scripts/recover-treasury-funds.ts --amount X` falla con amounts chicos por el gas internal del token que excede el allowance default de viem. **Iteración en chunks chicos** (0.10 → 0.07 → 0.05 → 0.025 → 0.01 USDT) funciona.
+- La economía de Arena tiene que predecrementar el stake real por ~1.5%, o absorber el fee como costo, o cambiar a un token sin fee (USDC en Celo Mainnet puede tener quirks similares — verificar).
+
+### Pendientes para la próxima sesión
+
+1. **Persistir SQLite en Railway volume**: setear `SQLITE_PATH=/data/hexarena.db` con un volume en `/data`. Sin esto, cada redeploy borra el balance acreditado. Es el bloqueador #1 del MVP.
+2. **2-device match pairing test**: smoke real con dos devices físicos MiniPay. Necesita otro operador (la última prueba con tu solo device no garantiza el match real).
+3. **Quitar logs `[HexArena:diag]` temporales** en server y cliente (dejados en commit `882e791` y `bc41166` para diagnosticar — ahora es momento de removerlos cuando confirmes el fix).
+4. **talent.app registration** (Prueba de Ship).
+5. **Submisión a MiniPay catalogue Stage 1** (intake form).
+
+### Recursos
+
+- Repo: https://github.com/opitradingacademy/hexarena (rama `main`). Push con `bash scripts/push-with-token.sh main`.
 - `apps/server` en Railway: https://hexarenaserver-production.up.railway.app
-- `apps/web` en Vercel: https://web-taupe-alpha-23.vercel.app (deployado vía CLI con `vercel --prod`, config en `vercel.json` de la raíz para que Vercel entienda el monorepo pnpm — root del proyecto Vercel es la raíz del repo, no `apps/web`, porque necesita ver el lockfile completo).
-- `ArenaSettlement.sol` en Celo Mainnet: `0x108E012C3B12421f216cA5C2C59770c34653e1d0`, verificado en Celoscan (https://celoscan.io/address/0x108e012c3b12421f216ca5c2c59770c34653e1d0). Token de settlement: USDT real (`0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e`, NO la dirección de fee-abstraction de MiniPay).
-- Integración e2e real (Casual + Arena) probada con dos clientes de socket reales, 159/159 tests Vitest.
+- `apps/web` en Vercel: https://web-taupe-alpha-23.vercel.app (alias de `web-taupe-alpha-23.vercel.app`)
+- `ArenaSettlement.sol` en Celo Mainnet: `0x108E012C3B12421f216cA5C2C59770c34653e1d0`, verificado en https://celoscan.io/address/0x108e012c3b12421f216ca5c2c59770c34653e1d0
+- Token de settlement: USDT de Celo `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e` (con quirk fee ~1.5% — ver arriba)
 
-**Resuelto (2026-07-03, sesión anterior)**: el bug histórico del balance USDT en $0.00 y el flow completo de Arena deposit. Cinco capas de bugs concurrentes atacadas en commits `c1495c5` → `6f9ebb9` → `9275b5f` → `da67002` → `2710924` → `3e4d5ad` → `563ca3f` → `df3e5c0` → `db281d0` → `2dccefd` → `ef3e9a2` → `194d759` → `871610f` → `6502182`: (1) `useIsMiniPay` con `useState(false)` quedaba stale en mount, (2) `getWalletAddress` no leía `provider.selectedAddress` antes que `eth_requestAccounts` (este último rompe en el provider-stub del WebView), (3) `getUsdtBalance` usaba viem+forno.celo.org inalcanzable por CORS desde el WebView, (4) hardcoded `balanceUSD = 0` en MatchmakingScreen que bloqueaba el flujo Arena, (5) treasury address corrupta (32 bytes) propagándose a on-chain reverts, (6) CORS faltante en el HTTP handler del server bloqueando fetch cross-origin desde MiniPay WebView, (7) propagación lenta de txs nuevas en public RPCs (forno, publicNode) requiriendo que el client fetchee el receipt localmente. Ver `openspec/changes/hexarena-mvp/tasks.md` para el detalle.
+## Patrones canónicos de la base
 
-### Bugs de deposit encontrados 2026-07-03 (sesión de esta noche) — commits `a872998` → `ad20b85` → `644cea4` → `aa62299`
+Estos se aplicaron 3+ veces en distintos lugares — son la fuente de verdad para futuras Mini Apps:
 
-Cuatro problemas reales encontrados testeando en device físico con la treasury nueva, en orden cronológico:
+1. **Resolver wallet en cada socket reconnect**, NO en module-load. MiniPay inyecta `window.ethereum` asincrónicamente. (ver lib/socketSingleton.ts)
+2. **Read on-chain**: `eth_call` por el provider inyectado, NUNCA un RPC público HTTP. La CORS bloquea forno.celo.org desde dentro del WebView.
+3. **Wallet address**: jerárquico `selectedAddress → eth_accounts → eth_requestAccounts`. `selectedAddress` no requiere RPC, gana en 0ms.
+4. **Send tx**: viem `createWalletClient` + `custom(window.ethereum)` + `{ account, to, data, feeCurrency: USDT_ADAPTER, type: 'cip64' }`. NUNCA raw eth_sendTransaction manual. `feeCurrency` es la dirección **del adapter**, NO del token.
+5. **Receipt**: el client fetchea el receipt con el provider-stub que firmó la tx (instantáneo). El server valida estructuralmente. NUNCA polling del server contra RPCs públicos (2-30s de lag). Si el local fetch falla, **delegar al server slow-path** omitiendo el campo `receipt` en el POST `/api/deposit`.
+6. **Env validation**: 32-byte (64-hex-char) addresses son CERRADAS — fail loud al boot, no dejar propagar a on-chain reverts.
+7. **CORS**: el HTTP handler necesita su propio Access-Control-Allow-Origin + OPTIONS preflight. Socket.IO's CORS no se extiende a HTTP.
+8. **Matchmaker**: NUNCA hacer match de un userId consigo mismo. Filtrar self-entries siempre.
+9. **Proveedor multi-RPC**: viem `fallback([...])` solo cae a la siguiente RPC si hay error de transporte, NO si devuelve `null`. Para poll de receipts nuevos, hacer `Promise.allSettled` sobre clients separados y tomar el primer non-null.
 
-1. **`handleSearch` forzaba depósito nuevo en cada "Find match"** (`apps/web/app/matchmaking/page.tsx`), ignorando `ledger.available` del server. El `onError` que abre el modal solo ante `INSUFFICIENT_BALANCE` ya existía pero era código muerto. Fix: `handleSearch` ahora emite `join_queue` directo (como Casual) y deja que el server rechace si no alcanza. Commit `a872998`.
-2. **Retry en `StakeConfirmDialog` re-firmaba una tx nueva** en vez de reusar el `txHash` ya firmado cuando el receipt fetch fallaba transitoriamente — riesgo de cobro doble. Fix: si `status.kind === "server-error"`, reusar `status.txHash` en vez de llamar `submitUsdtTransfer` de nuevo. Commit `a872998` (mismo commit que el punto 1). **Validado exitosamente una vez en device** pero después reapareció un caso relacionado (ver punto 4).
-3. **`receipt.to` comparado contra la treasury en vez del contrato del token** (`apps/server/chain/verifyDeposit.ts` + `depositEndpoint.ts`). Un receipt real de `transfer()` ERC-20 siempre tiene `to` = dirección del CONTRATO llamado (el token), nunca el destinatario — eso solo aparece en el log de `Transfer`. Los tests tenían el mismo error baked-in (mock con `to: TREASURY`), por eso nunca se detectó en CI. Mensaje visto en producción: `"transaction recipient is not the treasury"` con una tx confirmada en CeloScan. Fix: comparar `receipt.to` contra `tokenAddress` (nueva config requerida, `SETTLEMENT_TOKEN_ADDRESS[42220]` de `@hexarena/shared/chain`), y exigir también que el log de `Transfer` venga del contrato correcto (antes cualquier contrato podía falsificar el evento). Commit `ad20b85`. **También se encontró y arregló en la misma tanda**: `receipt.status` comparado contra el string `"success"`, pero el receipt crudo de `eth_getTransactionReceipt` (JSON-RPC puro, no normalizado por viem) devuelve `status` como hex (`"0x1"`/`"0x0"`) — nuevo helper `isSuccessStatus()`. Mensaje visto: `"receipt status is not success"`. Commit `644cea4`.
-4. **El error de viem se dispara DENTRO de la firma, no solo en el receipt fetch propio.** El fix del punto 2 asumía que `TransactionReceiptNotFoundError` siempre ocurre en nuestro propio `eth_getTransactionReceipt` (segundo try/catch, que sí guarda `txHash`). Pero también puede ocurrir DENTRO de `submitUsdtTransfer` (primer try/catch, `client.sendTransaction`) — MiniPay's provider espera la confirmación internamente antes de resolver `eth_sendTransaction` y tira ese error ANTES de devolver el hash. Ese catch seteaba `client-error` sin `txHash`, por lo que Retry firmaba tx nuevas en loop — el usuario confirmó 3+ cargos reales en una sola sesión de prueba. Fix: extraer el hash del texto del mensaje de error con regex (`/0x[0-9a-fA-F]{64}/`) y tratarlo como recuperable (`server-error`) si aparece. Commit `aa62299`. **⚠️ El usuario reportó que ESTE fix tampoco resolvió el problema en su prueba más reciente — sin confirmar la causa exacta. Retomar mañana.**
-
-Los 4 fixes tienen tests TDD (RED confirmado con `git stash` antes de cada fix, GREEN después). 166/166 tests pasando. Pero el problema end-to-end en device físico **persiste** después del 4to fix — hipótesis para mañana: (a) el regex de recuperación de hash no matchea el mensaje real que tira MiniPay en este caso puntual, (b) hay un quinto punto de falla no identificado todavía, (c) el deploy de Vercel no había terminado de propagar cuando se probó (poco probable, el usuario esperó).
-
-**Patrones canónicos de la base** (estos se aplicaron 3+ veces en distintos lugares — son la fuente de verdad para futuras Mini Apps):
-
-1. **Read on-chain**: `eth_call` por el provider inyectado, NUNCA un RPC público HTTP. La CORS bloquea forno.celo.org desde dentro del WebView.
-2. **Wallet address**: jerárquico `selectedAddress → eth_accounts → eth_requestAccounts`. `selectedAddress` no requiere RPC, gana en 0ms.
-3. **Send tx**: viem `createWalletClient` + `custom(window.ethereum)` + `{ account, to, data, feeCurrency: USDT_ADAPTER, type: 'cip64' }`. NUNCA raw eth_sendTransaction manual.
-4. **Receipt**: el client fetchea el receipt con el provider-stub que firmó (instantáneo). El server valida estructuralmente. NUNCA polling del server contra RPCs públicos (2-30s de lag).
-5. **Env validation**: 32-byte (64-hex-char) addresses son CERRADAS — fail loud al boot, no dejar propagar a on-chain reverts.
-6. **CORS**: el HTTP handler necesita su propio Access-Control-Allow-Origin + OPTIONS preflight. Socket.IO's CORS no se extiende a HTTP.
-
-## Alcance del MVP
-
-Casual 1v1 + Arena (apuestas). **Fuera de alcance**: torneos, temporadas, habilidades especiales (quedan para v2, están en el GDD pero no en `hexarena-mvp`).
-
-## Stack
-
-Monorepo con pnpm workspaces:
-
-- `packages/shared` — dominio puro del motor de juego (coordenadas axiales, captura en 6 direcciones, sin I/O) + tipos de protocolo WS + placeholder de tipos chain.
-- `apps/server` — Node.js + Socket.IO, autoridad del juego (turnos, reloj Blitz, reconexión con 30s de gracia), ledger interno en memoria (invariantes: balance nunca negativo, tx_hash único, hold/release atómico). POST /api/deposit endpoint valida receipts de Arena stake deposit.
-- `packages/contracts` — Foundry. `ArenaSettlement.sol`: fondeo pre-fondeado, `settle()` idempotente por matchId, `onlyOperator`, pause/withdraw `onlyOwner`. NO recalcula el rake on-chain (confía en el `amount` del backend).
-- `apps/web` — Next.js (App Router) Mini App para MiniPay. Detección `isMiniPay()`, fee abstraction vía viem (única lib con soporte nativo de `feeCurrency` + `type: 'cip64'`), 4 pantallas (Dashboard, Matchmaking, Tablero, Resultado/Historial).
-
-Test runner: Vitest (raíz del monorepo) + Foundry para contratos. Strict TDD Mode activo — seguir RED-GREEN-REFACTOR.
-
-## Reglas de negocio de Arena (ya decididas, no renegociar sin nueva confirmación del usuario)
-
-- House rake: **20%** del pool total (0.02 por cada 0.10 apostado) en toda victoria decisiva.
-- Ventana de gracia por desconexión: **30 segundos** exactos, fijo (no configurable en MVP).
-- Empate: reembolso **menos** house rake (mismo 20%), solo ledger, sin llamada on-chain.
-- Partida VOID por error de servidor: reembolso **total**, sin rake.
-
-## Reglas MiniPay para Mini Apps (HARD RULES — lint gate + hand-reviewed)
+## Reglas de MiniPay para Mini Apps (HARD RULES — lint gate + hand-reviewed)
 
 Estas reglas son obligatorias para cualquier Mini App. Hay un lint gate que las verifica automáticamente: `apps/web/bin/check-copy-rules.ts`. **Pero los criterios técnicos NO se chequean automáticamente** — requieren code review.
 
@@ -86,11 +100,11 @@ Estas reglas son obligatorias para cualquier Mini App. Hay un lint gate que las 
   - `type: 'cip64'` (string abstracto de viem), NUNCA `'0x7b'`, NUNCA `0`.
   - NO `maxFeePerGas`/`maxPriorityFeePerGas`/`gas`/`gasPrice` explícitos.
 - **Read on-chain**: `eth_call` por el provider inyectado, NUNCA un RPC público HTTP.
-- **Wallet address**: jerárquico `selectedAddress → eth_accounts → eth_requestAccounts`.
-- **Receipt fetching**: client-side, con el mismo provider-stub que firmó la tx. Server valida estructuralmente sin RPC polling.
+- **Wallet address**: jerárquico `selectedAddress → eth_accounts → eth_requestAccounts`. Resolver en cada `auth` callback del socket, no al module-load.
+- **Receipt fetching**: client-side, con el mismo provider-stub que firmó la tx. Server valida estructuralmente sin RPC polling. Si el fetch local falla o devuelve null, **delegar al server slow-path** sin el campo `receipt`.
 - **Env vars**: validar al boot que las addresses sean de 20 bytes (40 hex chars). Un valor de 64 hex chars es una address corrupta y debe fail loudly.
 - **CORS**: HTTP handlers necesitan Access-Control-Allow-Origin + OPTIONS preflight handler.
-- **Bundle size**: JS de `apps/web` debe pesar <2MB — hay un gate (`check:bundle-size`) que lo mide contra un build real. Al cierre de PR5: 1.09MB.
+- **Bundle size**: JS de `apps/web` debe pesar <2MB — hay un gate (`check:bundle-size`) que lo mide contra un build real. Al cierre de la sesión de hoy: a verificar después del cleanup.
 
 ### Direcciones de referencia (Mainnet, chainId 42220)
 
@@ -100,48 +114,6 @@ Estas reglas son obligatorias para cualquier Mini App. Hay un lint gate que las 
 | USDC  | `0xcebA9300f2b948710d2653dD7B07f33A8B32118C` | `0x2F25deB3848C207fc8E0c34035B3Ba7fC157602B` |
 | USDm  | `0x765DE816845861e75A25fCA122bb6898B8B1282a` | (el mismo, 18 decimales)                     |
 
-## Estado de Arena end-to-end
-
-| Componente                                    | Estado                                                  |
-| --------------------------------------------- | ------------------------------------------------------- |
-| Dashboard balance USDT                        | ✅ Verificado en device                                 |
-| StakeSelector chips                           | ✅ Verificado en device                                 |
-| StakeConfirmDialog modal                      | ✅ Verificado en device                                 |
-| Firmar tx con `type: 'cip64'` + `feeCurrency` | ✅ Verificado en device (CIP-64 type 0x7b en CeloScan)  |
-| POST /api/deposit con receipt                 | ✅ Verificado en device (modal cierra, ledger acredita) |
-| Match pairing (2 devices)                     | ⏳ Pendiente test con 2do device                        |
-| `settle()` post-match                         | ⏳ Implementado pero no validado en device              |
-
-### Variables de entorno requeridas
-
-**En Railway** (server):
-
-- `OPERATOR_PRIVATE_KEY` — key del operador (default: deriva la treasury address si no está `ARENA_TREASURY_ADDRESS`).
-- `ARENA_TREASURY_ADDRESS` — address que recibe los stakes de los usuarios (40 hex chars exactos). Si no se setea, el server falla al boot con mensaje claro.
-- `ARENA_CORS_ORIGIN` (opcional) — origin permitido para CORS. Default: `https://web-taupe-alpha-23.vercel.app`.
-- `CELO_MAINNET_RPC_URL` (opcional) — RPC público. Default: `https://celo-rpc.publicnode.com` con fallback a `https://forno.celo.org`.
-
-**En Vercel** (web):
-
-- `NEXT_PUBLIC_ARENA_TREASURY_ADDRESS` — mismo valor que en Railway.
-- `NEXT_PUBLIC_SERVER_URL` — URL base del API server. Default: `http://localhost:3001`.
-
-## Proof of Ship (programa de builder de Celo)
-
-Referencia: `~/.claude/skills/celopedia-skill/references/proof-of-ship.md`. Requisitos duros para calificar a premios: contrato en Celo Mainnet, repo público en GitHub con commits reales, app live, registro en talent.app. Es mensual — no hay apuro de fecha límite fija. HexArena (juego con prize pool en USDm) es Tier 1 (máximo fit).
-
-## Pendientes manuales
-
-1. ~~**Operator treasury real**~~ — ✅ Resuelto 2026-07-03: `ARENA_TREASURY_ADDRESS` / `NEXT_PUBLIC_ARENA_TREASURY_ADDRESS` = `0x34d5d015B4805E985619D0F4aaCb6343a6457fF2`, wallet separada del user, verificada en boot log de Railway y confirmada on-chain en CeloScan.
-2. **talent.app**: registrar el proyecto (Proof of Ship) — acción manual del usuario.
-3. **Submission a MiniPay catalogue** (Stage 2: UI screenshot 360×640, PageSpeed ≥90, ToS/Privacy, 24h SLA) — fuera del scope MVP pero es el siguiente paso natural.
-4. **2-device match pairing test** — confirmar que el server empareja correctamente dos usuarios en Arena.
-5. ~~**Script de recuperación de fondos de la treasury**~~ — ✅ Resuelto 2026-07-03: `scripts/recover-treasury-funds.ts` creado (dry-run por default, `--confirm` para ejecutar; lee `OPERATOR_PRIVATE_KEY` desde `.env.operator`/`.operator-key`/`.env`, nunca hardcodeada; usa fee abstraction — `feeCurrency` + `type: 'cip64'` — porque la treasury solo tiene USDT, no CELO, para pagar gas). Fondos recuperados a la wallet personal del usuario en múltiples transacciones; queda un remanente mínimo (dust) en la treasury, no recuperado por no ser rentable frente al gas. Punto cerrado.
-
-## Wireframes
-
-Las 4 pantallas están especificadas en Markdown dentro de `openspec/changes/hexarena-mvp/design.md` (layout, jerarquía de componentes, estados). El usuario las replica manualmente en `tools/OpenPencil-0.7.4-x64-win.exe` — esa app no tiene API/CLI, no intentar automatizarla.
-
 ## Comandos útiles
 
 ```bash
@@ -150,22 +122,23 @@ pnpm test                             # correr todos los tests (Vitest)
 pnpm --filter @hexarena/web dev       # levantar la Mini App en localhost:3000
 cd packages/contracts && forge test   # tests del contrato
 bash scripts/push-with-token.sh main  # push (no dejar token en git config)
-vercel --prod                        # deploy web a producción (alias web-taupe-alpha-23.vercel.app)
+vercel --prod                        # deploy web a producción
 ```
 
 ## Convenciones de trabajo con SDD (para retomar mañana)
 
-- Delivery strategy acordada: **PRs encadenados** (por el tamaño estimado del cambio, 3500-5000+ líneas si fuera todo junto).
+- Delivery strategy: **PRs encadenados** (por el tamaño del cambio, 3500-5000+ líneas si fuera todo junto).
 - Cada PR se delega a un sub-agente `sdd-apply` con alcance acotado a una fase del `tasks.md`, que debe leer `sdd/hexarena-mvp/apply-progress` de Engram antes de empezar y MERGEAR (no sobreescribir) su progreso al guardar.
-- No hay `git init` todavía en esta carpeta — pendiente cuando el usuario lo pida explícitamente.
+- Antes de empezar cualquier PR, leer `state.yaml` para saber la fase actual.
+- **Always leave a diagnostic breadcrumb** cuando el bug pueda no estar en el código (cache de browser, race condition). Los `[HexArena:diag]` console.logs son un patrón de esta sesión que vale la pena institucionalizar.
 
-## Debugging Arena: qué NO hacer
+## Debugging Arena: qué NO hacer — lessons learned
 
-Si en el futuro alguien trabaja en flow similar (signing + on-chain + server validation), evitar estos patrones que ya demostramos rotos:
-
-1. **NO** iterar sobre 5+ shapes de tx confiando solo en el error message. El error `execution reverted, data: 0x` es ambiguo y puede significar cualquier cosa. Después de 3 iteraciones, pedir al user que pegue el tx_hash y verificar en CeloScan si la tx está on-chain.
-2. **NO** usar `forno.celo.org` como RPC primario. Su latencia de propagación para txs nuevas es variable (2-30s). Usar `celo-rpc.publicnode.com` como primario.
-3. **NO** hacer polling del receipt en el server cuando el client puede hacerlo con el provider-stub que firmó. El provider-stub ve la tx inmediatamente.
-4. **NO** aceptar addresses de 64 hex chars como válidas — son 32 bytes (corruptas). Validar 20 bytes (40 hex chars) al boot.
-5. **NO** omitir CORS headers en HTTP handlers pensando que Socket.IO's CORS cubre todo. Cubre solo Socket.IO, no `/api/*` REST endpoints.
-6. **NO** desplegar un fix sin un test que cubra exactamente el bug que se arregla. El fix de la dirección corrupta se verificó con `apps/server/indexEnv.test.ts` (7 tests que cubren exactamente el caso del 32-byte address).
+1. **NO iterar sobre 5+ shapes de tx confiando solo en el error message**. El error `execution reverted, data: 0x` es ambiguo. Después de 3 iteraciones, pedir al user que pegue el tx_hash y verificar en CeloScan si la tx está on-chain.
+2. **NO usar `forno.celo.org` como RPC primario**. Latencia variable (2-30s). Usar `celo-rpc.publicnode.com` como primario + `forno.celo.org` como fallback.
+3. **NO hacer polling del receipt en el server** cuando el client puede hacerlo con el provider-stub. El provider-stub ve la tx inmediatamente.
+4. **NO aceptar addresses de 64 hex chars como válidas** — son 32 bytes (corruptas). Validar 20 bytes (40 hex chars) al boot.
+5. **NO omitir CORS headers en HTTP handlers** pensando que Socket.IO's CORS cubre todo. Cubre solo Socket.IO, no `/api/*` REST endpoints.
+6. **NO desplegar un fix sin un test que cubra exactamente el bug que se arregla**. El fix del socketSingleton (`7dd3c0c`) tiene 2 tests que cubren el caso, pero los actualicé porque cambié la API (usar promise en `auth`); deben escribirse los tests nuevos del async `auth` provider.
+7. **NO confiar en una lectura module-load de `window.ethereum` en MiniPay** — el provider llega async. Resolver en cada operación que lo necesite (socket reconnect, balance query, etc).
+8. **NO usar `fallback` de viem cuando la respuesta puede ser null legítimo** — para receipt polling, `Promise.allSettled` paralelo sobre clients separados.
