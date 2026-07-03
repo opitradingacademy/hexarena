@@ -105,9 +105,28 @@ export async function submitUsdtTransfer(args: {
     feeCurrency,
     type: "0x7b", // CIP-64 transaction type — required for feeCurrency on Celo
   } as unknown as Record<string, unknown>;
-  const txHash = (await args.ethereum.request({
-    method: "eth_sendTransaction",
-    params: [txParams],
-  })) as `0x${string}`;
-  return txHash;
+  // Diagnostic: log the exact payload before sending. Surfaced both via
+  // console.log (DevTools users) and the returned error message so the
+  // StakeConfirmDialog can render the JSON in its on-screen error block.
+  // In MiniPay's dev-mode WebView the only reliable place to read this
+  // back is the modal's error UI, so we throw a tagged error here and
+  // let the caller format it for display.
+  // eslint-disable-next-line no-console
+  console.log("[HexArena:txParams]", JSON.stringify(txParams, null, 2));
+  try {
+    const txHash = (await args.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [txParams],
+    })) as `0x${string}`;
+    return txHash;
+  } catch (e) {
+    const err = e as Error & { code?: number; data?: unknown };
+    // eslint-disable-next-line no-console
+    console.log("[HexArena:txError]", err);
+    const detail = err.data ?? err.message ?? "unknown error";
+    throw new Error(
+      `submitUsdtTransfer reverted: code=${err.code ?? "?"} ` +
+        `data=${typeof detail === "string" ? detail : JSON.stringify(detail)}`,
+    );
+  }
 }
