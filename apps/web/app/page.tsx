@@ -22,7 +22,7 @@ import { StakeConfirmDialog } from "../components/StakeConfirmDialog";
  */
 export default function DashboardPage() {
   const router = useRouter();
-  const { loading, balance, refresh: refreshWalletBalance } = useUsdtBalance();
+  const { loading, balance, reload: refreshWalletBalance } = useUsdtBalance();
   const {
     balance: gameBalance,
     loading: gameLoading,
