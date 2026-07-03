@@ -23,6 +23,19 @@ const publicClient = createPublicClient({
   ]),
 });
 
+// Explicit second public client for forno so it runs IN PARALLEL with
+// publicNode on every receipt poll, not just as a sequential fallback.
+// viem's `fallback()` only falls over on transport errors — when an RPC
+// returns null for a tx it hasn't seen yet (the production case),
+// fallback accepts that null and never asks the next transport. Having
+// forno as a separate client means every poll tries both and takes the
+// first non-null receipt, so the modal never blocks on whichever RPC
+// happens to be slowest on a given day.
+const fornoClient = createPublicClient({
+  chain: celo,
+  transport: http("https://forno.celo.org"),
+});
+
 // Fail loud at boot if the treasury env is missing or malformed. We
 // previously started with a 0x0…0 fallback and only surfaced the
 // misconfiguration at request time as 'INVALID_TX / WrongRecipientError'.
@@ -39,6 +52,7 @@ createServer(httpServer, store, {
   treasuryAddress,
   tokenAddress,
   publicClient,
+  extraPublicClients: [fornoClient],
   corsOrigin: process.env.ARENA_CORS_ORIGIN ?? "https://web-taupe-alpha-23.vercel.app",
 });
 

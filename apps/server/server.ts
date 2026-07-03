@@ -30,8 +30,25 @@ export type CreateServerOpts = {
   treasuryAddress: `0x${string}`;
   /** Settlement token contract address (e.g. USDT on Celo Mainnet). Required for /api/deposit. */
   tokenAddress: `0x${string}`;
-  /** viem public client for reading tx receipts. Required for /api/deposit. */
+  /**
+   * viem public client for reading tx receipts. Required for /api/deposit.
+   * Kept for compatibility / fallback; the server prefers `extraPublicClients`
+   * (parallel multi-RPC) over this single client when both are provided —
+   * see the comment on `provider` below for the rationale.
+   */
   publicClient: CeloPublicClient;
+  /**
+   * Additional public clients to fan out to in parallel each poll. Each
+   * one returns its OWN getTransactionReceipt result; the first non-null
+   * one wins. Required because viem's `fallback([...])` ONLY falls back
+   * on transport errors (timeout, 5xx) — when an RPC returns null for a
+   * tx it doesn't have yet (because propagation lag), `fallback` accepts
+   * that null and never tries the next transport. Production 2026-07-03
+   * showed publicNode taking >40s to surface a tx that forno and
+   * CeloScan already had, so a single RPC could mean the modal never
+   * progresses.
+   */
+  extraPublicClients?: readonly CeloPublicClient[];
   /**
    * Allowed origin for CORS. Defaults to '*' which is fine for an MVP
    * that only serves the hexarena Mini App. Pass the deployed Vercel
@@ -40,17 +57,42 @@ export type CreateServerOpts = {
   corsOrigin?: string | "*";
 };
 
-export function createServer(httpServer: HttpServer, store: LedgerStore, opts: CreateServerOpts) {
+export function createServer(
+  httpServer: HttpServer,
+  store: LedgerStore,
+  opts: CreateServerOpts = {} as CreateServerOpts,
+) {
   const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     cors: { origin: "*" },
   });
 
-  const provider: VerifyDepositProvider = {
-    getTransactionReceipt: async (args) => {
-      const r = await opts.publicClient.getTransactionReceipt(args);
-      return r as unknown as MinimalReceipt | null;
-    },
-  };
+  // Make /api/deposit a no-op (no provider-stub) when createServer is
+  // called without deposit wiring — needed by unit tests that don't
+  // care about REST endpoints. Production always wires both primary and
+  // extra clients via index.ts.
+  const primaryClient = opts.publicClient;
+  const extraClients = opts.extraPublicClients ?? [];
+  const provider: VerifyDepositProvider | null = primaryClient
+    ? {
+        getTransactionReceipt: async (args) => {
+          // Fan out to every configured RPC in parallel and take the first
+          // non-null receipt. Per-client transport errors are swallowed —
+          // a slow/dead RPC shouldn't sink the request, the other clients
+          // (and the fallback transport chain in primaryClient) cover it.
+          const allClients = [primaryClient, ...extraClients];
+          const tries = await Promise.allSettled(
+            allClients.map((c) => c.getTransactionReceipt(args)),
+          );
+          for (const result of tries) {
+            if (result.status === "fulfilled") {
+              const r = result.value as MinimalReceipt | null;
+              if (r) return r;
+            }
+          }
+          return null;
+        },
+      }
+    : null;
 
   // HTTP request dispatcher — single hand-off point for all REST endpoints.
   httpServer.on("request", async (req, res) => {
@@ -72,6 +114,14 @@ export function createServer(httpServer: HttpServer, store: LedgerStore, opts: C
     // POST /api/deposit — credit ledger with on-chain USDT transfer (see
     // depositEndpoint.ts NatSpec for the full contract).
     if (url.pathname === "/api/deposit") {
+      // Without a provider the server can't validate receipts — fail
+      // loud rather than silently 500ing every request. Production
+      // always wires one via index.ts.
+      if (!provider) {
+        res.writeHead(503, { "Content-Type": "application/json", ...corsHeaders });
+        res.end(JSON.stringify({ ok: false, code: "NO_RPC" }));
+        return;
+      }
       await handleDepositRequest(req, res, store, {
         treasury: opts.treasuryAddress,
         tokenAddress: opts.tokenAddress,
