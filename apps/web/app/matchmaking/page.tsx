@@ -101,19 +101,25 @@ function MatchmakingScreen() {
   async function handleSearch() {
     if (mode === "ARENA" && stake == null) return;
     setServerError(null);
-    // Production 2026-07-03 UX fix: in Arena mode, the cached
-    // balance in React state may lag the actual server ledger by
-    // tens of seconds — the user deposits, MiniPay's provider-stub
-    // confirms, the server polling finds the receipt, and the
-    // ledger is credited; meanwhile the React hook state can
-    // still be 0 if React hasn't re-rendered. Requery the server
-    // before deciding to open the stake modal so the user never
-    // hits the "sign up for $0.10 again" loop. Skip the refresh
-    // when the cached balance already covers the stake — that
-    // case has no convergence lag because the server polling
-    // already happened before the first render.
-    if (mode === "ARENA" && stake != null && balanceUSD < stake) {
-      const fresh = await refreshBalance();
+    // Production 2026-07-03 UX fix (v4 — NEVER-REOPEN): always
+    // require the server's fresh ledger view before deciding
+    // whether to open the stake modal. The cached React state can
+    // lag the server ledger by tens of seconds (the user has
+    // already deposited but the hook state hasn't re-rendered),
+    // and that lag drives the "modal reopened, sign again" loop.
+    // Trade a ~100ms HTTP round-trip for a deterministic flow.
+    if (mode === "ARENA" && stake != null) {
+      let fresh: number;
+      try {
+        fresh = await refreshBalance();
+      } catch {
+        // Couldn't reach the server at all. Surface this and ask
+        // the user to tap Find Match again — don't open the modal,
+        // since we genuinely don't know if a deposit is queued.
+        setServerError("Couldn't reach the server. Tap Find Match again in a few seconds.");
+        setStatus("idle");
+        return;
+      }
       if (fresh < stake) {
         setDepositOpen(true);
         return;
