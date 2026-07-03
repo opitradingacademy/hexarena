@@ -215,7 +215,7 @@ export function StakeConfirmDialog({
     >
       <div className="w-full max-w-sm rounded-2xl border border-arena-border bg-arena-bg p-6 text-slate-200 shadow-neonGold">
         <h2 className="text-lg font-black uppercase tracking-wider text-arena-gold">
-          Confirm stake
+          Confirm stake <span className="text-xs opacity-50">v3-handleSearch</span>
         </h2>
         <p className="mt-2 text-sm">
           You&rsquo;ll sign a network fee with stablecoins to deposit{" "}

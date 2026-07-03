@@ -139,16 +139,25 @@ function MatchmakingScreen() {
     // fresh join_queue when the previous one is still pending).
     setDepositOpen(false);
     setServerError(null);
-    const fresh = await refreshBalance();
-    if (mode === "ARENA" && stake != null && fresh >= stake) {
-      setStatus("searching");
-      getSocket().emit("join_queue", { mode: "ARENA", stake });
-    } else {
-      // The server polling hasn't credited the deposit yet — show a
-      // friendly "still waiting" hint so the user understands why
-      // they need to tap Find Match again.
+    try {
+      const fresh = await refreshBalance();
+      if (mode === "ARENA" && stake != null && fresh >= stake) {
+        setStatus("searching");
+        getSocket().emit("join_queue", { mode: "ARENA", stake });
+        return;
+      }
+    } catch {
+      // The /api/balance read failed (offline, CORS, etc.). Don't
+      // open the deposit modal again — the user just deposited and
+      // the server has it. Surface a message that tells them to tap
+      // Find Match again so we can re-read.
       setServerError("Deposit queued — Retry will reuse the signed tx once the server catches up.");
+      return;
     }
+    // The server polling hasn't credited the deposit yet — show a
+    // friendly "still waiting" hint so the user understands why
+    // they need to tap Find Match again.
+    setServerError("Deposit queued — Retry will reuse the signed tx once the server catches up.");
   }
 
   return (
