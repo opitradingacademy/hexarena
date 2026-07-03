@@ -27,4 +27,20 @@ describe("Matchmaker", () => {
     expect(mm.cancel("a")).toBe(true);
     expect(mm.join({ userId: "b", mode: "CASUAL" })).toBeNull();
   });
+
+  it("does NOT match a user with themselves when their own entry is still queued", () => {
+    // Production 2026-07-03: a user reconnects to matchmaking with
+    // the same wallet address (so the same userId stays in the
+    // socket-auth handshake). Their previous queue entry was never
+    // cancelled (cancel_queue only fires on user action, not on
+    // socket disconnect), so when they re-enter the queue,
+    // matchmaker.join shifts their own entry, pairs, and a 1-vs-1
+    // match starts/ends in <1s, kicking the user back to the
+    // matchmaking screen with no opponent.
+    const mm = new Matchmaker();
+    expect(mm.join({ userId: "alice", mode: "ARENA", stake: 0.1 })).toBeNull();
+    // Alice reconnects — same wallet, same userId.
+    const second = mm.join({ userId: "alice", mode: "ARENA", stake: 0.1 });
+    expect(second).toBeNull();
+  });
 });
