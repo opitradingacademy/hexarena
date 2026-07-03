@@ -95,6 +95,8 @@ async function withCustomProvider<T>(
     handleDepositRequest(req, res, store, {
       treasury: TREASURY,
       provider,
+      pollIntervalMs: 0,
+      maxAttempts: 1,
     }).catch(() => res.end());
   });
   await new Promise<void>((r) => http.listen(0, r));

@@ -40,6 +40,16 @@ export type VerifyDepositArgs = {
   provider: VerifyDepositProvider;
   /** Required minimum amount, in raw token units (e.g. 100_000n = 0.1 USDT). */
   minAmountRaw?: bigint;
+  /**
+   * Polling delay between getTransactionReceipt retries when the first
+   * call returns null. Default 1500ms — Celo Mainnet finalises a tx in
+   * ~1 block (~1s) but a freshly broadcast tx can take up to a few
+   * seconds to show up in the public RPC's mempool view. Higher than
+   * the block time to be safe.
+   */
+  pollIntervalMs?: number;
+  /** Max retry attempts after the initial receipt fetch. Default 10. */
+  maxAttempts?: number;
 };
 
 // keccak256("Transfer(address,address,uint256)")
@@ -90,7 +100,23 @@ export async function verifyDeposit(args: VerifyDepositArgs): Promise<{
   // Idempotency (`seenTxHashes`) is the caller's responsibility. The
   // HTTP handler uses store.findDeposit(txHash) before calling us so a
   // re-POST returns 409 without fetching the receipt.
-  const receipt = await args.provider.getTransactionReceipt({ hash: args.txHash });
+  const pollIntervalMs = args.pollIntervalMs ?? 1500;
+  const maxAttempts = args.maxAttempts ?? 10;
+
+  // Poll getTransactionReceipt until the tx is mined. The first call
+  // frequently returns null when the tx has been signed and broadcast
+  // but hasn't propagated to the RPC's mempool view yet. Celo Mainnet
+  // finalises in ~1 block (~1s) but the user-facing round-trip from
+  // signing to confirmation can take 2-6 seconds depending on RPC
+  // provider.
+  let receipt: MinimalReceipt | null = null;
+  for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+    receipt = await args.provider.getTransactionReceipt({ hash: args.txHash });
+    if (receipt) break;
+    if (attempt < maxAttempts) {
+      await new Promise<void>((r) => setTimeout(r, pollIntervalMs));
+    }
+  }
   if (!receipt || receipt.status !== "success") {
     throw new InvalidTransactionError("receipt not found or not successful");
   }

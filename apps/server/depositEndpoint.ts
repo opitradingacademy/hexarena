@@ -35,6 +35,10 @@ export type DepositEndpointConfig = {
   provider: VerifyDepositProvider;
   /** Default 6 (USDT). Used to convert raw on-chain units to USD. */
   settleTokenDecimals?: number;
+  /** Override the default 1500ms poll interval between receipt retries. */
+  pollIntervalMs?: number;
+  /** Override the default 10 retry attempts. */
+  maxAttempts?: number;
 };
 
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
@@ -104,6 +108,8 @@ export async function handleDepositRequest(
       treasury: config.treasury,
       seenTxHashes: new Set<string>(),
       provider: config.provider,
+      pollIntervalMs: config.pollIntervalMs,
+      maxAttempts: config.maxAttempts,
     });
     const amountUSD = Number(verified.amount) / 10 ** settleTokenDecimals;
     creditDeposit(store, wallet, txHash, amountUSD);

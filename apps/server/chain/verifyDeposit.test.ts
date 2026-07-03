@@ -7,6 +7,8 @@ import {
   WrongRecipientError,
 } from "./verifyDeposit";
 
+const HEX = "0x" + "ab".repeat(32);
+
 const TREASURY = "0x1111111111111111111111111111111111111111" as const;
 const SENDER = "0x2222222222222222222222222222222222222222" as const;
 const TX_HASH = ("0x" + "ab".repeat(32)) as `0x${string}`;
@@ -135,11 +137,49 @@ describe("verifyDeposit", () => {
     const provider = makeProvider(null);
     await expect(
       verifyDeposit({
+        txHash: TX_HASH as `0x${string}`,
+        treasury: TREASURY as `0x${string}`,
+        seenTxHashes: new Set<string>(),
+        provider,
+        pollIntervalMs: 0,
+        maxAttempts: 1,
+      }),
+    ).rejects.toBeInstanceOf(InvalidTransactionError);
+  });
+
+  describe("waitForReceipt polling", () => {
+    it("retries getTransactionReceipt until the tx is mined", async () => {
+      const receipt = makeReceipt({ logs: [encodeTransfer(TREASURY, 100_000n)] });
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(receipt);
+      const result = await verifyDeposit({
         txHash: TX_HASH,
         treasury: TREASURY,
         seenTxHashes: new Set<string>(),
-        provider,
-      }),
-    ).rejects.toBeInstanceOf(InvalidTransactionError);
+        provider: { getTransactionReceipt: request },
+        pollIntervalMs: 0,
+        maxAttempts: 3,
+      });
+      expect(result.amount).toBe(100_000n);
+      expect(request).toHaveBeenCalledTimes(3);
+    });
+
+    it("throws after maxAttempts when the receipt never appears", async () => {
+      const request = vi.fn().mockResolvedValue(null);
+      await expect(
+        verifyDeposit({
+          txHash: TX_HASH,
+          treasury: TREASURY,
+          seenTxHashes: new Set<string>(),
+          provider: { getTransactionReceipt: request },
+          pollIntervalMs: 0,
+          maxAttempts: 2,
+        }),
+      ).rejects.toBeInstanceOf(InvalidTransactionError);
+      expect(request).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
+    });
   });
 });
