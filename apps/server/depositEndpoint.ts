@@ -33,6 +33,7 @@ import { isAddress, getAddress } from "viem";
 import { creditDeposit } from "./ledger/ledger";
 import {
   verifyDeposit,
+  isSuccessStatus,
   InvalidTransactionError,
   WrongRecipientError,
   InsufficientAmountError,
@@ -80,7 +81,7 @@ function validateClientReceipt(
   treasury: `0x${string}`,
   tokenAddress: `0x${string}`,
 ): { ok: true; amount: bigint; from: `0x${string}` } {
-  if (receipt.status !== "success") {
+  if (!isSuccessStatus(receipt.status)) {
     throw new InvalidTransactionError("receipt status is not success");
   }
   // A `transfer()` receipt's `to` is always the token CONTRACT you

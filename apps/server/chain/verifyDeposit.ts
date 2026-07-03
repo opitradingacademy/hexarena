@@ -96,6 +96,19 @@ function eqAddr(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
 
+/**
+ * A receipt's `status` field has two valid shapes depending on where it
+ * came from: viem's own typed client normalizes it to 'success' |
+ * 'reverted', but a receipt fetched via raw `ethereum.request({method:
+ * "eth_getTransactionReceipt"})` (as the MiniPay client does — see
+ * StakeConfirmDialog.tsx) is the untouched Ethereum JSON-RPC response,
+ * where status is the hex quantity "0x1" (success) or "0x0" (failure).
+ * Reject anything else.
+ */
+export function isSuccessStatus(status: string): boolean {
+  return status === "success" || status === "0x1" || status === "1";
+}
+
 function pad32(addr: string): string {
   const stripped = addr.toLowerCase().replace(/^0x/, "");
   return "0x" + stripped.padStart(64, "0");
@@ -126,7 +139,7 @@ export async function verifyDeposit(args: VerifyDepositArgs): Promise<{
       await new Promise<void>((r) => setTimeout(r, pollIntervalMs));
     }
   }
-  if (!receipt || receipt.status !== "success") {
+  if (!receipt || !isSuccessStatus(receipt.status)) {
     throw new InvalidTransactionError("receipt not found or not successful");
   }
   if (!receipt.to || !eqAddr(receipt.to, args.tokenAddress)) {

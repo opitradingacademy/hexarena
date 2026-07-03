@@ -256,6 +256,60 @@ describe("POST /api/deposit", () => {
     );
   });
 
+  it("credits the ledger when the client-supplied receipt has a raw hex status (real MiniPay shape)", async () => {
+    // The client fetches this receipt via raw `ethereum.request({method:
+    // "eth_getTransactionReceipt"})`, NOT through viem — so per the
+    // Ethereum JSON-RPC spec, `status` is the hex quantity "0x1"/"0x0",
+    // never the string "success"/"reverted" viem normalizes to. A real
+    // MiniPay deposit that was confirmed on CeloScan hit this exact gap.
+    const receipt = {
+      status: "0x1",
+      to: TOKEN,
+      from: SENDER,
+      blockHash: "0x" + "11".repeat(32),
+      blockNumber: "0x64",
+      contractAddress: null,
+      cumulativeGasUsed: "0x0",
+      effectiveGasPrice: "0x0",
+      gasUsed: "0x0",
+      logs: [
+        {
+          address: TOKEN,
+          topics: [
+            "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+            "0x000000000000000000000000" + SENDER.slice(2).toLowerCase(),
+            "0x000000000000000000000000" + TREASURY.slice(2).toLowerCase(),
+          ],
+          data: "0x" + 100_000n.toString(16).padStart(64, "0"),
+        },
+      ],
+      logsBloom: "0x",
+      transactionHash: TX_HASH,
+      transactionIndex: "0x0",
+      type: "0x2",
+    };
+    const provider: VerifyDepositProvider = {
+      getTransactionReceipt: vi.fn().mockResolvedValue(receipt),
+    };
+    await withCustomProvider(
+      provider,
+      () => {},
+      async (port) => {
+        const { status, body } = await fetchJson(`http://127.0.0.1:${port}/api/deposit`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-wallet-address": SENDER,
+          },
+          body: JSON.stringify({ txHash: TX_HASH, receipt }),
+        });
+        expect(status).toBe(200);
+        expect(body.ok).toBe(true);
+        expect(body.balanceUSD).toBeCloseTo(0.1, 5);
+      },
+    );
+  });
+
   it("returns 422 when the receipt has no matching Transfer event to the treasury", async () => {
     const receipt = {
       status: "success",
