@@ -23,7 +23,6 @@ function setWindowEthereum(
 describe("StakeConfirmDialog", () => {
   beforeEach(() => {
     setWindowEthereum(async ({ method }: { method: string }) => {
-      if (method === "eth_gasPrice") return Promise.resolve("0x4a817c800");
       if (method === "eth_sendTransaction") return Promise.resolve(TX_HASH);
       throw new Error("unreachable: " + method);
     });
@@ -63,7 +62,6 @@ describe("StakeConfirmDialog", () => {
 
   it("submits a USDT transfer, POSTs the txHash, and calls onSuccess", async () => {
     setWindowEthereum(async ({ method }: { method: string }) => {
-      if (method === "eth_gasPrice") return Promise.resolve("0x4a817c800");
       if (method === "eth_sendTransaction") return Promise.resolve(TX_HASH);
       throw new Error("unreachable: " + method);
     });
@@ -106,7 +104,6 @@ describe("StakeConfirmDialog", () => {
 
   it("surfaces the server error when /api/deposit returns a non-200", async () => {
     setWindowEthereum(async ({ method }: { method: string }) => {
-      if (method === "eth_gasPrice") return Promise.resolve("0x4a817c800");
       if (method === "eth_sendTransaction") return Promise.resolve(TX_HASH);
       throw new Error("unreachable: " + method);
     });

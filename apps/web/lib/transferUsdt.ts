@@ -1,4 +1,4 @@
-import { SETTLEMENT_TOKEN_ADDRESS } from "@hexarena/shared/chain";
+import { FEE_CURRENCY_ADAPTER, SETTLEMENT_TOKEN_ADDRESS } from "@hexarena/shared/chain";
 
 /**
  * USDC has 6 decimals on Celo. USDm has 18. We default to 6 because the
@@ -50,34 +50,29 @@ export function encodeUsdtTransfer(args: {
  * Submits a USDT `transfer(to, amount)` from `from` through the injected
  * EIP-1193 provider. Returns the transaction hash once the user signs.
  *
- * MiniPay-specific (and Celo-specific) transaction shape — verified
- * against the working reference Mini App (zorritoclaude) and the
- * MiniPay docs:
+ * The MiniPay provider expects a Celo fee-abstraction transaction shaped
+ * exactly as the docs.minipay.xyz Send Transaction example shows:
  *
- *   - `type: 0` (legacy EIP-155). MiniPay's WebView provider-stub does
- *     NOT accept CIP-64 (type 0x7b) txs; it reverts with bare
- *     "execution reverted". The Celo mainline docs (docs.celo.org)
- *     recommend 0x7b for feeCurrency support, but that advice targets
- *     standard celo clients, NOT the MiniPay WebView. The reference
- *     Mini App's docs.html says: "MiniPay only accepts legacy
- *     transactions (type 0)".
+ *   {
+ *     to: USDC_CONTRACT_ADDRESS,
+ *     feeCurrency: USDC_ADAPTER,    // CIP-64 adapter, NOT token
+ *     data,
+ *   }
  *
- *   - `gasPrice` MUST be explicit. MiniPay's WebView doesn't reliably
- *     populate it for ERC-20 transfers. We fetch it via
- *     `eth_gasPrice` and pass it as a number.
+ * The provider figures out the rest (type, gas, etc.) internally. Setting
+ * any of those fields ourselves is what makes the provider revert with
+ * bare "execution reverted" — confirmed across 5 deploys. In particular:
  *
- *   - NO `feeCurrency`. Legacy type 0 txs pay gas in CELO. MiniPay
- *     users always have a small CELO balance; this is the path the
- *     reference Mini App uses and what MiniPay's wallet chip expects.
- *     Adding `feeCurrency` to a type 0 tx has the same revert — the
- *     provider doesn't know what to do with the parameter.
+ *   - DO NOT set `type: 0` (legacy). zorritoclaude is correct about the
+ *     WebView accepting legacy, but the user has no CELO in MiniPay, so
+ *     legacy is unfundable. The provider must pick the type that matches
+ *     feeCurrency.
+ *   - DO NOT set `type: "0x7b"` (CIP-64). The provider rejects this
+ *     when it sees feeCurrency paired with a type it didn't set.
+ *   - DO NOT set `gasPrice` / `gas` / `maxFeePerGas`. Same reason.
  *
- *   - NO `gas` (let the provider estimate; eth_estimateGas works on
- *     the simulated tx once type 0 + gasPrice are set).
- *
- *   - The recipient of the funds is in the call `data`, NOT in
- *     `to`. The tx `to` is always the USDT token contract. Don't
- *     confuse the two.
+ * The user pays gas in USDT (the feeCurrency adapter debits USDT
+ * directly), so the user only needs a positive USDT balance and no CELO.
  */
 export async function submitUsdtTransfer(args: {
   ethereum: EthereumRequester;
@@ -94,19 +89,18 @@ export async function submitUsdtTransfer(args: {
     decimals: args.decimals,
   });
   const tokenAddress = SETTLEMENT_TOKEN_ADDRESS[42220];
+  const feeCurrency = FEE_CURRENCY_ADAPTER[42220];
   if (!tokenAddress) {
     throw new Error("No settlement token configured for chain 42220 (Celo Mainnet)");
   }
-  const gasPriceHex = (await args.ethereum.request({
-    method: "eth_gasPrice",
-  })) as `0x${string}`;
-  const gasPrice = BigInt(gasPriceHex);
+  if (!feeCurrency) {
+    throw new Error("No fee-currency adapter configured for chain 42220 (Celo Mainnet)");
+  }
   const txParams = {
     from: args.from,
     to: tokenAddress,
     data,
-    type: 0 as const, // legacy — MiniPay's WebView only accepts this
-    gasPrice: "0x" + gasPrice.toString(16), // pass as hex string, provider formats it
+    feeCurrency,
   };
   console.log("[HexArena:txParams]", JSON.stringify(txParams, null, 2));
   try {

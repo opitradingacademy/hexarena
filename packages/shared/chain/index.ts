@@ -20,6 +20,18 @@ export const SETTLEMENT_TOKEN_ADDRESS: Partial<Record<ChainId, `0x${string}`>> =
   42220: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
 };
 
+/**
+ * USDT fee-currency adapter on Celo Mainnet (CIP-64). The MiniPay
+ * provider accepts USDT-as-fee only via this adapter address — passing
+ * the USDT token address directly as `feeCurrency` makes
+ * `eth_estimateGas` revert with bare "execution reverted".
+ * Verified against docs.minipay.xyz/technical-references/send-transaction
+ * (token addresses table, "Uses Adapter?" column).
+ */
+export const FEE_CURRENCY_ADAPTER: Partial<Record<ChainId, `0x${string}`>> = {
+  42220: "0x0E2A3e05bc9A16F5292A6170456A710cb89C6f72",
+};
+
 /** `settle(bytes32 matchId, address winner, uint256 amount)` — the only ABI fragment apps/server calls. */
 export const ARENA_SETTLEMENT_ABI = [
   {
