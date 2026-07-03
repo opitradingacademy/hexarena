@@ -57,8 +57,14 @@ createServer(httpServer, store, {
 });
 
 const port = Number(process.env.PORT ?? 3001);
-httpServer.listen(port, () => {
-  console.log(`hexarena server listening on :${port}`);
+// Pin to 0.0.0.0 so Railway's HTTP proxy can reach the listener.
+// Production 2026-07-03: server started fine (logs show ":8080" from
+// the listen callback), but every external HTTP request timed out
+// because Node 22's default listen hostname is IPv6-only on some
+// platforms, and Railway's proxy speaks IPv4 to the container. Forcing
+// the IPv4 wildcard fixes the silent hang.
+httpServer.listen(port, "0.0.0.0", () => {
+  console.log(`hexarena server listening on 0.0.0.0:${port}`);
   console.log(`arena treasury: ${treasuryAddress}`);
   console.log(`primary RPC: celo-rpc.publicnode.com (fallback forno.celo.org)`);
 });
