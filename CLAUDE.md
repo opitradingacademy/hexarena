@@ -10,7 +10,7 @@ Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos
 - Estado del DAG: `openspec/changes/hexarena-mvp/state.yaml` — siempre revisar ahí antes de asumir qué fase sigue.
 - Progreso de implementación detallado: Engram, topic_key `sdd/hexarena-mvp/apply-progress`.
 
-**Al día de hoy (2026-07-03)**: PR1-PR5 de 5 completados. Todo deployado y en producción. **Arena flow end-to-end implementado y production-ready**, validado 1-device en MiniPay físico (tx firmada, receipt confirmado en CeloScan, modal cierra correctamente). Pendiente: 2-device match pairing y operator treasury address real (actualmente self-transfer porque la env está apuntando a la wallet del user).
+**Al día de hoy (2026-07-03)**: PR1-PR5 de 5 completados. Todo deployado y en producción. **Arena flow end-to-end implementado y production-ready**, validado 1-device en MiniPay físico (tx firmada, receipt confirmado en CeloScan, modal cierra correctamente). Operator treasury address real ya configurada (`0x34d5d015B4805E985619D0F4aaCb6343a6457fF2`, generada con `cast wallet new`, separada de la wallet del user) — verificada en Railway (`arena treasury:` en boot log) y confirmada on-chain en CeloScan que el depósito llegó a esa dirección. Pendiente: 2-device match pairing.
 
 - Repo público: https://github.com/opitradingacademy/hexarena (rama `main`). Push requiere `bash scripts/push-with-token.sh main` (token en `.github-token`, gitignored — no hay credenciales persistentes en `git config`).
 - `apps/server` en Railway: https://hexarenaserver-production.up.railway.app
@@ -117,7 +117,7 @@ Referencia: `~/.claude/skills/celopedia-skill/references/proof-of-ship.md`. Requ
 
 ## Pendientes manuales
 
-1. **Operator treasury real**: configurar `ARENA_TREASURY_ADDRESS` y `NEXT_PUBLIC_ARENA_TREASURY_ADDRESS` con una address de operator separada del user wallet (no la misma).
+1. ~~**Operator treasury real**~~ — ✅ Resuelto 2026-07-03: `ARENA_TREASURY_ADDRESS` / `NEXT_PUBLIC_ARENA_TREASURY_ADDRESS` = `0x34d5d015B4805E985619D0F4aaCb6343a6457fF2`, wallet separada del user, verificada en boot log de Railway y confirmada on-chain en CeloScan.
 2. **talent.app**: registrar el proyecto (Proof of Ship) — acción manual del usuario.
 3. **Submission a MiniPay catalogue** (Stage 2: UI screenshot 360×640, PageSpeed ≥90, ToS/Privacy, 24h SLA) — fuera del scope MVP pero es el siguiente paso natural.
 4. **2-device match pairing test** — confirmar que el server empareja correctamente dos usuarios en Arena.
