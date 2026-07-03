@@ -3,7 +3,19 @@
  * just made on-chain to the operator treasury. See arena-deposit decision
  * (Approach B).
  *
- * Body: { txHash: "0x..." }.
+ * Body: { txHash: "0x...", receipt?: MinimalReceipt }.
+ *   - txHash is always required (idempotency key).
+ *   - receipt is OPTIONAL but recommended. If the client POSTs the
+ *     receipt (which its MiniPay provider-stub fetched via the same
+ *     nodo that just signed the tx), the server validates the
+ *     receipt structurally and skips its own RPC poll — which is
+ *     critical because public RPCs (forno.celo.org,
+ *     celo-rpc.publicnode.com) have 2-30s propagation latency for
+ *     newly broadcast tx hashes, while the user's own provider-stub
+ *     sees them in milliseconds.
+ *   - If receipt is missing, the server falls back to polling the
+ *     configured public RPC (slower path, used as a safety net).
+ *
  * Auth: caller declares their wallet via the X-Wallet-Address header.
  *       For MVP this is declarative, not a signed challenge — the chain tx
  *       itself already proves control of `from`. Production should also
@@ -26,6 +38,7 @@ import {
   InsufficientAmountError,
   DuplicateTransactionError,
   type VerifyDepositProvider,
+  type MinimalReceipt,
 } from "./chain/verifyDeposit";
 import type { LedgerStore } from "./ledger/types";
 import { applyCorsHeaders } from "./cors";
@@ -42,12 +55,48 @@ export type DepositEndpointConfig = {
 };
 
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+function pad32(hex: string): string {
+  const stripped = hex.toLowerCase().replace(/^0x/, "");
+  return "0x" + stripped.padStart(64, "0");
+}
+
+function eqAddr(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
 
 /**
- * Functional handler so the routing layer in server.ts can chain
- * specific endpoints instead of stacking listeners on 'request'.
- * Returns true when the request was handled (caller must NOT respond again).
+ * Validate a client-provided receipt in isolation. This is the fast path:
+ * the user signed the tx via their MiniPay provider-stub and that same
+ * stub can fetch the receipt in milliseconds. The server only needs to
+ * check that the receipt's `to` and Transfer event match the expected
+ * treasury + amount — no RPC fetch.
  */
+function validateClientReceipt(
+  receipt: MinimalReceipt,
+  treasury: `0x${string}`,
+): { ok: true; amount: bigint; from: `0x${string}` } {
+  if (receipt.status !== "success") {
+    throw new InvalidTransactionError("receipt status is not success");
+  }
+  if (!receipt.to || !eqAddr(receipt.to, treasury)) {
+    throw new WrongRecipientError();
+  }
+  const paddedTreasury = pad32(treasury);
+  const matchingLog = receipt.logs.find(
+    (log) => log.topics[0] === TRANSFER_TOPIC && log.topics[2] === paddedTreasury,
+  );
+  if (!matchingLog) {
+    throw new InvalidTransactionError("no matching Transfer event to treasury");
+  }
+  return {
+    ok: true,
+    amount: BigInt(matchingLog.data),
+    from: receipt.from as `0x${string}`,
+  };
+}
+
 export async function handleDepositRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -77,7 +126,10 @@ export async function handleDepositRequest(
     return true;
   }
 
-  let body: { txHash?: string } = {};
+  let body: {
+    txHash?: string;
+    receipt?: MinimalReceipt;
+  } = {};
   try {
     body = JSON.parse((await readBody(req)) || "{}");
   } catch {
@@ -103,15 +155,26 @@ export async function handleDepositRequest(
   }
 
   try {
-    const verified = await verifyDeposit({
-      txHash,
-      treasury: config.treasury,
-      seenTxHashes: new Set<string>(),
-      provider: config.provider,
-      pollIntervalMs: config.pollIntervalMs,
-      maxAttempts: config.maxAttempts,
-    });
-    const amountUSD = Number(verified.amount) / 10 ** settleTokenDecimals;
+    let amount: bigint;
+    if (body.receipt) {
+      // Fast path: the client already fetched the receipt via its own
+      // MiniPay provider-stub. Validate structurally without RPC fetch.
+      const verified = validateClientReceipt(body.receipt, config.treasury);
+      amount = verified.amount;
+    } else {
+      // Slow path: poll the configured public RPC. Used as a safety net
+      // when the client can't fetch its own receipt.
+      const verified = await verifyDeposit({
+        txHash,
+        treasury: config.treasury,
+        seenTxHashes: new Set<string>(),
+        provider: config.provider,
+        pollIntervalMs: config.pollIntervalMs,
+        maxAttempts: config.maxAttempts,
+      });
+      amount = verified.amount;
+    }
+    const amountUSD = Number(amount) / 10 ** settleTokenDecimals;
     creditDeposit(store, wallet, txHash, amountUSD);
     respond(res, 200, {
       ok: true,

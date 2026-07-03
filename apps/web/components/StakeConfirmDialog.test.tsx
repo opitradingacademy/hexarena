@@ -21,6 +21,33 @@ function setViemProvider() {
         if (method === "eth_accounts") return [SENDER];
         if (method === "eth_estimateGas") return "0x186a0"; // 100_000
         if (method === "eth_sendTransaction") return TX_HASH;
+        if (method === "eth_getTransactionReceipt")
+          return {
+            status: "success",
+            to: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            from: SENDER,
+            blockHash: "0x" + "11".repeat(32),
+            blockNumber: "0x64",
+            contractAddress: null,
+            cumulativeGasUsed: "0x0",
+            effectiveGasPrice: "0x0",
+            gasUsed: "0x0",
+            logs: [
+              {
+                address: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+                topics: [
+                  "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                  "0x000000000000000000000000" + SENDER.slice(2).toLowerCase(),
+                  "0x000000000000000000000000" + TREASURY.slice(2).toLowerCase(),
+                ],
+                data: "0x" + 100_000n.toString(16).padStart(64, "0"),
+              },
+            ],
+            logsBloom: "0x",
+            transactionHash: TX_HASH,
+            transactionIndex: "0x0",
+            type: "0x2",
+          };
         throw new Error("unreachable: " + method);
       }),
     },
@@ -97,9 +124,15 @@ describe("StakeConfirmDialog", () => {
           "x-wallet-address": SENDER,
           "content-type": "application/json",
         }),
-        body: JSON.stringify({ txHash: TX_HASH }),
       }),
     );
+    // The client also sends the receipt the provider-stub fetched
+    // synchronously after signing — server validates it structurally
+    // without RPC polling.
+    const fetchArgs = fetchSpy.mock.calls[0];
+    const sentBody = JSON.parse(fetchArgs[1].body as string);
+    expect(sentBody.txHash).toBe(TX_HASH);
+    expect(sentBody.receipt).toMatchObject({ status: "success" });
   });
 
   it("surfaces the server error when /api/deposit returns a non-200", async () => {

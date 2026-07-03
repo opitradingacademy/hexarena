@@ -195,6 +195,99 @@ describe("POST /api/deposit", () => {
     );
   });
 
+  it("credits the ledger when the client provides a fully-fetched receipt", async () => {
+    // The new flow: client fetches the receipt via its own provider-stub
+    // (which sees the tx immediately) and POSTs the full receipt
+    // object. The server validates the receipt structurally — no
+    // polling needed because the receipt already arrived.
+    const receipt = {
+      status: "success",
+      to: TREASURY,
+      from: SENDER,
+      blockHash: "0x" + "11".repeat(32),
+      blockNumber: "0x64", // hex strings — what viem actually returns in JSON
+      contractAddress: null,
+      cumulativeGasUsed: "0x0",
+      effectiveGasPrice: "0x0",
+      gasUsed: "0x0",
+      logs: [
+        {
+          address: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+          topics: [
+            "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+            "0x000000000000000000000000" + SENDER.slice(2).toLowerCase(),
+            "0x000000000000000000000000" + TREASURY.slice(2).toLowerCase(),
+          ],
+          data: "0x" + 100_000n.toString(16).padStart(64, "0"),
+        },
+      ],
+      logsBloom: "0x",
+      transactionHash: TX_HASH,
+      transactionIndex: "0x0",
+      type: "0x2",
+    };
+    const provider: VerifyDepositProvider = {
+      // Provider stub isn't even called in this flow — the receipt is
+      // validated purely from the POST body.
+      getTransactionReceipt: vi.fn().mockResolvedValue(receipt),
+    };
+    await withCustomProvider(
+      provider,
+      () => {},
+      async (port) => {
+        const { status, body } = await fetchJson(`http://127.0.0.1:${port}/api/deposit`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-wallet-address": SENDER,
+          },
+          body: JSON.stringify({ txHash: TX_HASH, receipt }),
+        });
+        expect(status).toBe(200);
+        expect(body.ok).toBe(true);
+        expect(body.balanceUSD).toBeCloseTo(0.1, 5);
+      },
+    );
+  });
+
+  it("returns 422 when the receipt's recipient is not the treasury", async () => {
+    const receipt = {
+      status: "success",
+      to: "0xdead000000000000000000000000000000000000",
+      from: SENDER,
+      blockHash: "0x" + "11".repeat(32),
+      blockNumber: "0x64",
+      contractAddress: null,
+      cumulativeGasUsed: "0x0",
+      effectiveGasPrice: "0x0",
+      gasUsed: "0x0",
+      logs: [],
+      logsBloom: "0x",
+      transactionHash: TX_HASH,
+      transactionIndex: "0x0",
+      type: "0x2",
+    };
+    const provider: VerifyDepositProvider = {
+      getTransactionReceipt: vi.fn().mockResolvedValue(receipt),
+    };
+    await withCustomProvider(
+      provider,
+      () => {},
+      async (port) => {
+        const { status, body } = await fetchJson(`http://127.0.0.1:${port}/api/deposit`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-wallet-address": SENDER,
+          },
+          body: JSON.stringify({ txHash: TX_HASH, receipt }),
+        });
+        expect(status).toBe(422);
+        expect(body.code).toBe("INVALID_TX");
+      },
+    );
+  });
+
   it("returns 405 for non-POST methods", async () => {
     await withServer(
       () => {},

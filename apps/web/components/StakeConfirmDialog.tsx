@@ -85,13 +85,21 @@ export function StakeConfirmDialog({
 
     setStatus({ kind: "confirming", txHash });
     try {
+      // Fetch the receipt from the same provider-stub that signed the
+      // tx — that nodo has it immediately, no propagation latency.
+      // Sending the receipt lets the server validate without polling
+      // forno.celo.org (which lags 2-30s on new tx hashes).
+      const receipt = (await ethereum.request({
+        method: "eth_getTransactionReceipt",
+        params: [txHash],
+      })) as Record<string, unknown> | null;
       const res = await fetch(depositServerUrl, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           "x-wallet-address": senderAddress,
         },
-        body: JSON.stringify({ txHash }),
+        body: JSON.stringify({ txHash, receipt }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
