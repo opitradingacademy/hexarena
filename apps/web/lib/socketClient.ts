@@ -1,12 +1,9 @@
 import { io, type Socket } from "socket.io-client";
-import type {
-  ClientToServerEvents,
-  ServerToClientEvents,
-} from "@hexarena/shared/protocol";
+import type { ClientToServerEvents, ServerToClientEvents } from "@hexarena/shared/protocol";
 
 export type HexArenaSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-export type SocketAuthProvider = () => { walletAddress?: string };
+export type SocketAuthProvider = () => Promise<{ walletAddress?: string }>;
 
 /**
  * Typed Socket.IO client for the realtime-protocol contract
@@ -25,13 +22,19 @@ export type SocketAuthProvider = () => { walletAddress?: string };
  * underlying WebSocket still opens, which made this easy to miss). We wrap
  * the plain `() => data` provider into the callback shape socket.io expects.
  */
-export function createSocketClient(
-  serverUrl: string,
-  auth?: SocketAuthProvider,
-): HexArenaSocket {
+export function createSocketClient(serverUrl: string, auth?: SocketAuthProvider): HexArenaSocket {
   return io(serverUrl, {
     transports: ["websocket"],
     autoConnect: false,
-    ...(auth ? { auth: (cb: (data: ReturnType<SocketAuthProvider>) => void) => cb(auth()) } : {}),
+    ...(auth
+      ? {
+          auth: (cb: (data: { walletAddress?: string }) => void) => {
+            // The provider may return a Promise (wallet-resolving is
+            // async); socket.io's auth callback must call `cb(data)`
+            // exactly once, so we await the promise then invoke cb.
+            Promise.resolve(auth()).then((data) => cb(data));
+          },
+        }
+      : {}),
   }) as HexArenaSocket;
 }
