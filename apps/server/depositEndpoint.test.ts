@@ -397,3 +397,48 @@ describe("POST /api/deposit", () => {
     );
   });
 });
+
+describe("GET /api/balance", () => {
+  it("returns the ledger balance for a given wallet", async () => {
+    await withServer(
+      (store) => {
+        store.upsertUser(SENDER, SENDER);
+        creditDeposit(store, SENDER, "0x" + "cd".repeat(32), 0.42);
+      },
+      async (port) => {
+        const { status, body } = await fetchJson(
+          `http://127.0.0.1:${port}/api/balance?wallet=${SENDER}`,
+        );
+        expect(status).toBe(200);
+        expect(body.ok).toBe(true);
+        expect(body.balanceUSD).toBeCloseTo(0.42, 5);
+      },
+    );
+  });
+
+  it("returns 400 for missing or invalid wallet query param", async () => {
+    await withServer(
+      () => {},
+      async (port) => {
+        const r1 = await fetchJson(`http://127.0.0.1:${port}/api/balance`);
+        expect(r1.status).toBe(400);
+        const r2 = await fetchJson(`http://127.0.0.1:${port}/api/balance?wallet=not-an-address`);
+        expect(r2.status).toBe(400);
+      },
+    );
+  });
+
+  it("returns balance 0 for an address that has never deposited (no NaN)", async () => {
+    await withServer(
+      () => {},
+      async (port) => {
+        const { status, body } = await fetchJson(
+          `http://127.0.0.1:${port}/api/balance?wallet=${SENDER}`,
+        );
+        expect(status).toBe(200);
+        expect(body.ok).toBe(true);
+        expect(body.balanceUSD).toBe(0);
+      },
+    );
+  });
+});

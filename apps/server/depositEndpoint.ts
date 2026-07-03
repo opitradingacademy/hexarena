@@ -16,6 +16,13 @@
  *   - If receipt is missing, the server falls back to polling the
  *     configured public RPC (slower path, used as a safety net).
  *
+ * GET /api/balance?wallet=<address> — return { ok, balanceUSD } so a
+ *   stumped user (or a debug session) can see what the server's ledger
+ *   thinks the wallet holds. Critical for diagnosing the "modal-loop"
+ *   case where the chain tx mined but the server polled too soon and
+ *   hasn't credited it yet — running this query after Retry in the
+ *   modal confirms whether the deposit eventually landed.
+ *
  * Auth: caller declares their wallet via the X-Wallet-Address header.
  *       For MVP this is declarative, not a signed challenge — the chain tx
  *       itself already proves control of `from`. Production should also
@@ -117,6 +124,33 @@ export async function handleDepositRequest(
 ): Promise<boolean> {
   if (!req.url) return false;
   const url = new URL(req.url, "http://localhost");
+
+  // GET /api/balance?wallet=<address> — read-only ledger query, useful
+  // for diagnosing the modal-loop case where the chain tx mined but the
+  // polling in /api/deposit timed out before the public RPC caught up.
+  // The user can hit this endpoint (or the client polls it after Retry)
+  // to confirm whether the deposit eventually credited.
+  if (url.pathname === "/api/balance") {
+    const walletParam = url.searchParams.get("wallet");
+    if (!walletParam || !isAddress(walletParam)) {
+      respond(res, 400, {
+        ok: false,
+        code: "BAD_REQUEST",
+        msg: "wallet must be a valid 0x-prefixed 20-byte address",
+      });
+      return true;
+    }
+    const normalized = getAddress(walletParam);
+    // upsertUser makes balanceOf safe — a zero-balance query still
+    // returns 0 instead of NaN.
+    store.upsertUser(normalized, normalized);
+    respond(res, 200, {
+      ok: true,
+      balanceUSD: store.balanceOf(normalized),
+    });
+    return true;
+  }
+
   if (url.pathname !== "/api/deposit") return false;
 
   const settleTokenDecimals = config.settleTokenDecimals ?? 6;
