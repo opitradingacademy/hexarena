@@ -110,6 +110,13 @@ function MatchmakingScreen() {
     // deposit from another tab pulled the credit), but the common
     // path now avoids it entirely.
     if (mode === "ARENA" && stake != null && balanceUSDRef.current < stake) {
+      // Client-side balance check: pre-open the stake modal
+      // because the server ledger doesn't cover the chosen
+      // stake. Deliberately don't set serverError here — that's
+      // reserved for the server-rejection path. The modal itself
+      // doesn't need a sidebar error label, which kept the
+      // "Insufficient balance for stake" banner stale from a
+      // previous attempt visible above the modal.
       setServerError(null);
       setDepositOpen(true);
       return;
