@@ -3,6 +3,7 @@ import { createPublicClient, http } from "viem";
 import { celo } from "viem/chains";
 import { createServer } from "./server";
 import { MemoryLedgerStore } from "./ledger/memoryStore";
+import { validateTreasuryAddress } from "./indexEnv";
 
 const httpServer = createHttpServer();
 const store = new MemoryLedgerStore();
@@ -10,15 +11,12 @@ const store = new MemoryLedgerStore();
 const rpcUrl = process.env.CELO_MAINNET_RPC_URL ?? "https://forno.celo.org";
 const publicClient = createPublicClient({ chain: celo, transport: http(rpcUrl) });
 
-/**
- * Treasury address that receives user Arena stakes. Configured via the
- * ARENA_TREASURY_ADDRESS env. When unset (e.g. fresh deploy, env drift)
- * the server still starts so health checks pass, but every /api/deposit
- * call will fail the receipt's `to` check — this surfaces the
- * misconfiguration loudly at request time instead of crashing boot.
- */
-const treasuryAddress = (process.env.ARENA_TREASURY_ADDRESS ??
-  "0x0000000000000000000000000000000000000000") as `0x${string}`;
+// Fail loud at boot if the treasury env is missing or malformed. We
+// previously started with a 0x0…0 fallback and only surfaced the
+// misconfiguration at request time as 'INVALID_TX / WrongRecipientError'.
+// That delayed the obvious fix (paste the right address into Railway)
+// for hours.
+const treasuryAddress = validateTreasuryAddress(process.env.ARENA_TREASURY_ADDRESS ?? "");
 
 createServer(httpServer, store, {
   treasuryAddress,
