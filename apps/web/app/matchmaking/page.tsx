@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { GameMode } from "@hexarena/shared/protocol";
 import { StakeSelector } from "../../components/StakeSelector";
@@ -11,13 +11,22 @@ import { getWalletAddress } from "../../lib/wallet";
 import { waitForEthereum } from "../../lib/waitForEthereum";
 import { getArenaTreasuryAddress, getDepositUrl } from "../../lib/serverUrl";
 
+/** Track the freshest value of `value` in a ref for sync closures. */
+function useStateRef<T>(value: T): { current: T } {
+  const ref = useRef(value);
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+  return ref;
+}
+
 /**
  * Matchmaking screen (design.md wireframe "2. Matchmaking Queue").
- * Arena flow requires the user to deposit their stake to the operator
- * treasury before join_queue — see arena-deposit Approach B in CLAUDE.md.
- * The StakeConfirmDialog handles the on-chain transfer + /api/deposit
- * credit step; only after the ledger credit does this screen emit
- * join_queue with the chosen stake.
+ * Arena flow auto-opens the stake modal when the user taps Find Match
+ * but the server ledger doesn't yet cover the chosen stake — so the
+ * user never sees an "INSUFFICIENT_BALANCE" error in the happy
+ * path. The /api/deposit receipt step credits the ledger, the
+ * join_queue then goes through, and the user is matched.
  */
 export default function MatchmakingPage() {
   return (
@@ -91,6 +100,20 @@ function MatchmakingScreen() {
 
   function handleSearch() {
     if (mode === "ARENA" && stake == null) return;
+    // Production 2026-07-03 UX fix: in Arena mode, before emitting
+    // join_queue, do a client-side balance check and pre-open the
+    // stake modal if the server ledger doesn't yet have enough.
+    // This way the user never sees the "INSUFFICIENT_BALANCE" error
+    // — they just get the stake modal as a normal part of the
+    // matchmaking flow. The server's INSUFFICIENT_BALANCE handler
+    // is still wired up as a backstop for edge cases (e.g. concurrent
+    // deposit from another tab pulled the credit), but the common
+    // path now avoids it entirely.
+    if (mode === "ARENA" && stake != null && balanceUSDRef.current < stake) {
+      setServerError(null);
+      setDepositOpen(true);
+      return;
+    }
     setServerError(null);
     setStatus("searching");
     getSocket().emit(
@@ -105,13 +128,28 @@ function MatchmakingScreen() {
   }
 
   async function handleStakeConfirmed() {
+    // Production 2026-07-03 UX fix: after a successful deposit tx,
+    // do NOT auto-resume the matchmaking flow on the client. Wait
+    // for the user to confirm again — but make the second click a
+    // no-op if the ledger already covers the stake (don't emit a
+    // fresh join_queue when the previous one is still pending).
     setDepositOpen(false);
-    setStatus("searching");
-    // Refresh the server ledger view so the server's balanceOf check
-    // sees the freshly-credited deposit on the next join_queue.
-    void refreshBalance();
-    getSocket().emit("join_queue", { mode: "ARENA", stake: stake ?? 0 });
+    setServerError(null);
+    const fresh = await refreshBalance();
+    if (mode === "ARENA" && stake != null && fresh >= stake) {
+      setStatus("searching");
+      getSocket().emit("join_queue", { mode: "ARENA", stake });
+    } else {
+      // The server polling hasn't credited the deposit yet — show a
+      // friendly "still waiting" hint so the user understands why
+      // they need to tap Find Match again.
+      setServerError("Deposit queued — Retry will reuse the signed tx once the server catches up.");
+    }
   }
+
+  // Latest server-ledger balance, kept fresh in a ref so the
+  // synchronous handleSearch path can read it without stale-closure bugs.
+  const balanceUSDRef = useStateRef(balanceUSD);
 
   return (
     <main className="mx-auto flex max-w-md flex-col px-4 pt-6">

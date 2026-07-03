@@ -47,6 +47,49 @@ vi.mock("../../lib/serverUrl", () => ({
 
 import MatchmakingPage from "./page";
 
+function mockEthereumSuccess(txHash = "0x" + "ab".repeat(32)): void {
+  Object.defineProperty(window, "ethereum", {
+    value: {
+      request: vi.fn().mockImplementation(async ({ method }: { method: string }) => {
+        if (method === "eth_chainId") return "0xa4ec";
+        if (method === "eth_blockNumber") return "0x1";
+        if (method === "eth_requestAccounts") return ["0x2222222222222222222222222222222222222222"];
+        if (method === "eth_accounts") return ["0x2222222222222222222222222222222222222222"];
+        if (method === "eth_estimateGas") return "0x186a0";
+        if (method === "eth_sendTransaction") return txHash;
+        if (method === "eth_getTransactionReceipt") {
+          return {
+            status: "success",
+            to: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            from: "0x2222222222222222222222222222222222222222",
+            logs: [
+              {
+                address: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+                topics: [
+                  "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                  "0x0000000000000000000000002222222222222222222222222222222222222222",
+                  "0x0000000000000000000000001111111111111111111111111111111111111111",
+                ],
+                data: "0x" + 100_000n.toString(16).padStart(64, "0"),
+              },
+            ],
+          };
+        }
+        throw new Error("unreachable: " + method);
+      }),
+    },
+    configurable: true,
+    writable: true,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, balanceUSD: 0.1 }),
+    }),
+  );
+}
+
 describe("MatchmakingScreen — Arena stake balance reuse", () => {
   beforeEach(() => {
     fakeSocket.removeAllListeners();
@@ -59,67 +102,61 @@ describe("MatchmakingScreen — Arena stake balance reuse", () => {
 
   it("emits join_queue directly without forcing a fresh deposit when the ledger already has enough balance", async () => {
     render(<MatchmakingPage />);
-
     fireEvent.click(screen.getByText("$0.10"));
     const emitSpy = vi.spyOn(fakeSocket, "emit");
     fireEvent.click(screen.getByText("Find match"));
-
     expect(emitSpy).toHaveBeenCalledWith("join_queue", { mode: "ARENA", stake: 0.1 });
     expect(screen.queryByTestId("stake-confirm-dialog")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/Searching for opponent/i)).toBeInTheDocument());
   });
 
-  it("opens the deposit dialog when the server rejects INSUFFICIENT_BALANCE mid-flight and the ledger still shows 0 after reload", async () => {
-    // Production 2026-07-03 modal-loop path: user has the chip
-    // enabled (server ledger showed enough at mount), picks $0.10,
-    // taps Find match, server rejects with INSUFFICIENT_BALANCE.
-    // The new code refreshes the ledger first; if the refresh
-    // returns 0 (i.e. the server-side view truly doesn't cover the
-    // stake), the dialog opens.
+  it("auto-opens the stake modal when Find Match is tapped but the ledger has insufficient balance", async () => {
     ledgerState = {
-      balance: 3.69,
+      balance: 0,
       refresh: vi.fn().mockResolvedValue(0),
     };
     render(<MatchmakingPage />);
-
     fireEvent.click(screen.getByText("$0.10"));
     const emitSpy = vi.spyOn(fakeSocket, "emit");
     fireEvent.click(screen.getByText("Find match"));
-    await waitFor(() => expect(screen.getByText(/Searching for opponent/i)).toBeInTheDocument());
-    emitSpy.mockClear();
-
-    fakeSocket.emit("error", { code: "INSUFFICIENT_BALANCE", msg: "Insufficient balance" });
-
     await waitFor(() => expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument());
-    expect(emitSpy).not.toHaveBeenCalledWith(
-      "join_queue",
-      expect.objectContaining({ mode: "ARENA" }),
-    );
+    expect(emitSpy).not.toHaveBeenCalledWith("join_queue", expect.anything());
   });
 
-  it("does NOT open the deposit dialog if the server ledger reload shows enough — retries join_queue", async () => {
-    // Production 2026-07-03 modal-loop fix cover: server rejects
-    // with INSUFFICIENT_BALANCE based on stale state, but the
-    // actual server ledger (refreshed) DOES cover the stake. The
-    // screen must re-emit join_queue silently and never pop the
-    // modal — otherwise the user signs another tx they didn't
-    // need to.
-    const refreshSpy = vi.fn().mockResolvedValue(0.5);
-    ledgerState = { balance: 3.69, refresh: refreshSpy };
+  it("auto-resumes matchmaking after stake confirmation if the ledger now covers the stake", async () => {
+    mockEthereumSuccess();
+    ledgerState = {
+      balance: 0,
+      refresh: vi.fn().mockResolvedValue(0.1),
+    };
     render(<MatchmakingPage />);
-
     fireEvent.click(screen.getByText("$0.10"));
     const emitSpy = vi.spyOn(fakeSocket, "emit");
     fireEvent.click(screen.getByText("Find match"));
-    await waitFor(() => expect(screen.getByText(/Searching for opponent/i)).toBeInTheDocument());
-    emitSpy.mockClear();
-
-    fakeSocket.emit("error", { code: "INSUFFICIENT_BALANCE", msg: "stale cache" });
-
+    await waitFor(() => expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("stake-confirm-button"));
     await waitFor(() =>
       expect(emitSpy).toHaveBeenCalledWith("join_queue", { mode: "ARENA", stake: 0.1 }),
     );
     expect(screen.queryByTestId("stake-confirm-dialog")).not.toBeInTheDocument();
-    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it("does NOT auto-resume if the ledger still shows 0 after stake confirmation — sets a 'queued' hint", async () => {
+    mockEthereumSuccess();
+    ledgerState = {
+      balance: 0,
+      refresh: vi.fn().mockResolvedValue(0),
+    };
+    render(<MatchmakingPage />);
+    fireEvent.click(screen.getByText("$0.10"));
+    const emitSpy = vi.spyOn(fakeSocket, "emit");
+    fireEvent.click(screen.getByText("Find match"));
+    await waitFor(() => expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("stake-confirm-button"));
+    await waitFor(() => expect(screen.getByText(/Deposit queued/i)).toBeInTheDocument());
+    expect(emitSpy).not.toHaveBeenCalledWith(
+      "join_queue",
+      expect.objectContaining({ mode: "ARENA" }),
+    );
   });
 });

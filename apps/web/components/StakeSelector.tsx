@@ -9,30 +9,37 @@ export type StakeSelectorProps = {
 const STAKE_OPTIONS = [0.1, 0.25, 0.5, 1];
 
 /**
- * Matchmaking screen stake chip selector (design.md "2. Matchmaking Queue").
- * Chips are disabled when balance is below the stake amount.
+ * Matchmaking screen stake chip selector (design.md "2. Matchmaking
+ * Queue"). Chips are clickable even when the user's ledger balance
+ * doesn't cover them — the matchmaking screen (not the selector)
+ * decides whether to pre-open the stake modal. The user shouldn't
+ * have to think about "do I have funds?" before they pick a stake
+ * amount.
  */
 export function StakeSelector({ balanceUSD, selectedStake, onSelect }: StakeSelectorProps) {
   return (
     <div data-testid="stake-selector" className="flex flex-wrap gap-2">
       {STAKE_OPTIONS.map((stake) => {
-        const disabled = balanceUSD < stake;
         const selected = selectedStake === stake;
         return (
           <button
             key={stake}
             type="button"
-            disabled={disabled}
             aria-pressed={selected}
-            title={disabled ? "Add funds" : undefined}
+            data-testid={`stake-chip-${stake}`}
             onClick={() => onSelect(stake)}
-            className={`rounded-full border px-4 py-2 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-30 ${
+            className={`rounded-full border px-4 py-2 text-sm font-bold transition ${
               selected
                 ? "border-arena-gold bg-arena-gold text-arena-bg"
-                : "border-arena-border bg-arena-surface text-slate-200"
+                : "border-arena-border bg-arena-surface text-slate-200 hover:border-arena-gold/50"
             }`}
           >
-            {formatUSD(stake)}
+            <div className="flex flex-col items-center gap-0.5">
+              <span>{formatUSD(stake)}</span>
+              {balanceUSD < stake && (
+                <span className="text-[9px] uppercase tracking-wider opacity-70">Top up</span>
+              )}
+            </div>
           </button>
         );
       })}

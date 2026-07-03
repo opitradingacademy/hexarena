@@ -4,21 +4,25 @@ import { describe, expect, it, vi } from "vitest";
 import { StakeSelector } from "./StakeSelector";
 
 describe("StakeSelector", () => {
-  it("disables chips above the current balance and shows an 'Add funds' tooltip", () => {
+  it("shows a 'Top up' hint under chips whose stake exceeds the balance", () => {
     render(<StakeSelector balanceUSD={0.2} selectedStake={null} onSelect={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "$0.50" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "$0.50" })).toHaveAttribute("title", "Add funds");
+    // The chip's $0.50 cell shows the stake AND a 'Top up' hint,
+    // rendered as a Button whose textContent includes both.
+    expect(screen.getByTestId("stake-chip-0.5")).toHaveTextContent(/Top up/i);
+    expect(screen.getByTestId("stake-chip-0.1")).not.toHaveTextContent(/Top up/i);
   });
 
-  it("keeps chips within balance enabled", () => {
-    render(<StakeSelector balanceUSD={0.2} selectedStake={null} onSelect={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "$0.10" })).toBeEnabled();
-  });
-
-  it("calls onSelect with the numeric stake when an enabled chip is clicked", () => {
+  it("keeps chips within balance without the Top up hint and accepts a click", () => {
     const onSelect = vi.fn();
     render(<StakeSelector balanceUSD={5} selectedStake={null} onSelect={onSelect} />);
-    fireEvent.click(screen.getByRole("button", { name: "$0.25" }));
+    expect(screen.getByTestId("stake-chip-0.25")).not.toHaveTextContent(/Top up/i);
+    fireEvent.click(screen.getByTestId("stake-chip-0.25"));
     expect(onSelect).toHaveBeenCalledWith(0.25);
+  });
+
+  it("all chips are clickable even when the ledger cannot cover them — the matchmaking screen handles the rest", async () => {
+    render(<StakeSelector balanceUSD={0} selectedStake={null} onSelect={vi.fn()} />);
+    expect(screen.getByTestId("stake-chip-0.1")).toBeEnabled();
+    expect(screen.getByTestId("stake-chip-1")).toBeEnabled();
   });
 });
