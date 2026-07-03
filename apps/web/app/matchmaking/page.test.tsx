@@ -94,6 +94,12 @@ describe("MatchmakingScreen — Arena stake balance reuse", () => {
   beforeEach(() => {
     fakeSocket.removeAllListeners();
     push.mockClear();
+    vi.unstubAllGlobals();
+    Object.defineProperty(window, "ethereum", {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
     ledgerState = {
       balance: 3.69,
       refresh: vi.fn().mockResolvedValue(3.69),
@@ -105,7 +111,9 @@ describe("MatchmakingScreen — Arena stake balance reuse", () => {
     fireEvent.click(screen.getByText("$0.10"));
     const emitSpy = vi.spyOn(fakeSocket, "emit");
     fireEvent.click(screen.getByText("Find match"));
-    expect(emitSpy).toHaveBeenCalledWith("join_queue", { mode: "ARENA", stake: 0.1 });
+    await waitFor(() =>
+      expect(emitSpy).toHaveBeenCalledWith("join_queue", { mode: "ARENA", stake: 0.1 }),
+    );
     expect(screen.queryByTestId("stake-confirm-dialog")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/Searching for opponent/i)).toBeInTheDocument());
   });
@@ -125,9 +133,13 @@ describe("MatchmakingScreen — Arena stake balance reuse", () => {
 
   it("auto-resumes matchmaking after stake confirmation if the ledger now covers the stake", async () => {
     mockEthereumSuccess();
+    // First refresh (Find Match) returns 0 → modal opens because
+    // ledger hasn't caught up. Second refresh (after stake
+    // confirmation) returns 0.1 → auto-resumes the queue.
+    let refreshCalls = 0;
     ledgerState = {
       balance: 0,
-      refresh: vi.fn().mockResolvedValue(0.1),
+      refresh: vi.fn().mockImplementation(async () => (refreshCalls++ === 0 ? 0 : 0.1)),
     };
     render(<MatchmakingPage />);
     fireEvent.click(screen.getByText("$0.10"));
@@ -143,21 +155,19 @@ describe("MatchmakingScreen — Arena stake balance reuse", () => {
 
   it("does NOT auto-resume if the ledger still shows 0 after stake confirmation — sets a 'queued' hint", async () => {
     mockEthereumSuccess();
+    let refreshCalls = 0;
     ledgerState = {
       balance: 0,
-      refresh: vi.fn().mockResolvedValue(0),
+      refresh: vi.fn().mockImplementation(async () => 0),
     };
     render(<MatchmakingPage />);
     fireEvent.click(screen.getByText("$0.10"));
     const emitSpy = vi.spyOn(fakeSocket, "emit");
     fireEvent.click(screen.getByText("Find match"));
-    await waitFor(() =>
-      expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("stake-confirm-button"));
-    await waitFor(() =>
-      expect(screen.getByText(/Deposit queued/i)).toBeInTheDocument(),
-    );
+    // Don't refresh — server still sees 0 → "Deposit queued" hint
+    await waitFor(() => expect(screen.getByText(/Deposit queued/i)).toBeInTheDocument());
     expect(emitSpy).not.toHaveBeenCalledWith(
       "join_queue",
       expect.objectContaining({ mode: "ARENA" }),
@@ -178,9 +188,7 @@ describe("MatchmakingScreen — Arena stake balance reuse", () => {
     render(<MatchmakingPage />);
     fireEvent.click(screen.getByText("$0.10"));
     fireEvent.click(screen.getByText("Find match"));
-    await waitFor(() =>
-      expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument());
     // The banner must NOT be visible behind the modal.
     expect(screen.queryByText(/Insufficient balance for stake/i)).not.toBeInTheDocument();
   });

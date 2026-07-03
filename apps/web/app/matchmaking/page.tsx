@@ -98,30 +98,27 @@ function MatchmakingScreen() {
     };
   }, [router, refreshBalance]);
 
-  function handleSearch() {
+  async function handleSearch() {
     if (mode === "ARENA" && stake == null) return;
-    // Production 2026-07-03 UX fix: in Arena mode, before emitting
-    // join_queue, do a client-side balance check and pre-open the
-    // stake modal if the server ledger doesn't yet have enough.
-    // This way the user never sees the "INSUFFICIENT_BALANCE" error
-    // — they just get the stake modal as a normal part of the
-    // matchmaking flow. The server's INSUFFICIENT_BALANCE handler
-    // is still wired up as a backstop for edge cases (e.g. concurrent
-    // deposit from another tab pulled the credit), but the common
-    // path now avoids it entirely.
-    if (mode === "ARENA" && stake != null && balanceUSDRef.current < stake) {
-      // Client-side balance check: pre-open the stake modal
-      // because the server ledger doesn't cover the chosen
-      // stake. Deliberately don't set serverError here — that's
-      // reserved for the server-rejection path. The modal itself
-      // doesn't need a sidebar error label, which kept the
-      // "Insufficient balance for stake" banner stale from a
-      // previous attempt visible above the modal.
-      setServerError(null);
-      setDepositOpen(true);
-      return;
-    }
     setServerError(null);
+    // Production 2026-07-03 UX fix: in Arena mode, the cached
+    // balance in React state may lag the actual server ledger by
+    // tens of seconds — the user deposits, MiniPay's provider-stub
+    // confirms, the server polling finds the receipt, and the
+    // ledger is credited; meanwhile the React hook state can
+    // still be 0 if React hasn't re-rendered. Requery the server
+    // before deciding to open the stake modal so the user never
+    // hits the "sign up for $0.10 again" loop. Skip the refresh
+    // when the cached balance already covers the stake — that
+    // case has no convergence lag because the server polling
+    // already happened before the first render.
+    if (mode === "ARENA" && stake != null && balanceUSD < stake) {
+      const fresh = await refreshBalance();
+      if (fresh < stake) {
+        setDepositOpen(true);
+        return;
+      }
+    }
     setStatus("searching");
     getSocket().emit(
       "join_queue",
@@ -153,10 +150,6 @@ function MatchmakingScreen() {
       setServerError("Deposit queued — Retry will reuse the signed tx once the server catches up.");
     }
   }
-
-  // Latest server-ledger balance, kept fresh in a ref so the
-  // synchronous handleSearch path can read it without stale-closure bugs.
-  const balanceUSDRef = useStateRef(balanceUSD);
 
   return (
     <main className="mx-auto flex max-w-md flex-col px-4 pt-6">
