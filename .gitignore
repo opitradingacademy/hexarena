@@ -11,3 +11,10 @@ tools/*.exe
 .github-token
 
 .vercel
+
+# Operator/treasury wallet secrets — NEVER commit. Preemptively ignored
+# ahead of the recovery script (see CLAUDE.md "Pendientes manuales").
+.env.operator
+.operator-key
+*.operator-key
+scripts/*.secret*
