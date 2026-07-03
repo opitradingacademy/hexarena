@@ -189,7 +189,7 @@ function MatchmakingScreen() {
         </div>
       )}
 
-      {serverError && (
+      {serverError && !depositOpen && (
         <p
           role="alert"
           className="mt-4 rounded-xl border border-arena-magenta/60 bg-arena-magenta/10 p-3 text-sm text-arena-magenta"

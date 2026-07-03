@@ -151,12 +151,37 @@ describe("MatchmakingScreen — Arena stake balance reuse", () => {
     fireEvent.click(screen.getByText("$0.10"));
     const emitSpy = vi.spyOn(fakeSocket, "emit");
     fireEvent.click(screen.getByText("Find match"));
-    await waitFor(() => expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument(),
+    );
     fireEvent.click(screen.getByTestId("stake-confirm-button"));
-    await waitFor(() => expect(screen.getByText(/Deposit queued/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Deposit queued/i)).toBeInTheDocument(),
+    );
     expect(emitSpy).not.toHaveBeenCalledWith(
       "join_queue",
       expect.objectContaining({ mode: "ARENA" }),
     );
+  });
+
+  it("hides the 'Insufficient balance for stake' banner once the stake modal is open", async () => {
+    // The error banner lives on the matchmaking page. When the user
+    // hits Find Match with insufficient balance, the modal opens —
+    // but the modal already carries its own error indicator (the
+    // StakeConfirmDialog has the same code in its errorMessage prop).
+    // Showing both is redundant and confusing ("you can't sign" +
+    // the actual signing dialog that lets them sign).
+    ledgerState = {
+      balance: 0,
+      refresh: vi.fn().mockResolvedValue(0),
+    };
+    render(<MatchmakingPage />);
+    fireEvent.click(screen.getByText("$0.10"));
+    fireEvent.click(screen.getByText("Find match"));
+    await waitFor(() =>
+      expect(screen.getByTestId("stake-confirm-dialog")).toBeInTheDocument(),
+    );
+    // The banner must NOT be visible behind the modal.
+    expect(screen.queryByText(/Insufficient balance for stake/i)).not.toBeInTheDocument();
   });
 });
