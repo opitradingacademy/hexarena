@@ -66,15 +66,20 @@ function MatchmakingScreen() {
   }, [router]);
 
   function handleSearch() {
-    // Casual joins the queue directly; Arena requires a stake deposit.
-    if (mode === "CASUAL") {
-      setStatus("searching");
-      getSocket().emit("join_queue", { mode: "CASUAL" });
-      return;
-    }
-    if (stake == null) return;
-    setDepositOpen(true);
+    // Both modes try join_queue directly first — the server already
+    // knows how to check ledger.available >= stake (design.md:42) and
+    // rejects with INSUFFICIENT_BALANCE when it doesn't. Only that
+    // rejection (handled in onError above) should open the deposit
+    // dialog; opening it unconditionally here would force a fresh
+    // on-chain deposit every time, ignoring stake balance the user
+    // already has credited from a previous deposit.
+    if (mode === "ARENA" && stake == null) return;
     setServerError(null);
+    setStatus("searching");
+    getSocket().emit(
+      "join_queue",
+      mode === "CASUAL" ? { mode: "CASUAL" } : { mode: "ARENA", stake: stake ?? undefined },
+    );
   }
 
   function handleCancel() {

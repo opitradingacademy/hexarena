@@ -68,19 +68,28 @@ export function StakeConfirmDialog({
       setStatus({ kind: "client-error", msg: "No provider — open inside MiniPay." });
       return;
     }
-    setStatus({ kind: "sending-tx" });
+
+    // Retrying from a server-error must resume from the already-signed
+    // txHash instead of calling submitUsdtTransfer again — otherwise a
+    // transient receipt-fetch failure (MiniPay's own RPC lagging behind
+    // a tx that's already mined) would double-charge the user on retry.
     let txHash: `0x${string}`;
-    try {
-      txHash = await submitUsdtTransfer({
-        ethereum,
-        from: senderAddress,
-        to: treasury,
-        amountUSD: stakeUSD,
-      });
-    } catch (e) {
-      const msg = (e as Error).message || "Tx rejected";
-      setStatus({ kind: "client-error", msg });
-      return;
+    if (status.kind === "server-error") {
+      txHash = status.txHash;
+    } else {
+      setStatus({ kind: "sending-tx" });
+      try {
+        txHash = await submitUsdtTransfer({
+          ethereum,
+          from: senderAddress,
+          to: treasury,
+          amountUSD: stakeUSD,
+        });
+      } catch (e) {
+        const msg = (e as Error).message || "Tx rejected";
+        setStatus({ kind: "client-error", msg });
+        return;
+      }
     }
 
     setStatus({ kind: "confirming", txHash });

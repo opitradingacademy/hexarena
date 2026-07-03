@@ -158,6 +158,72 @@ describe("StakeConfirmDialog", () => {
     expect(screen.getByTestId("stake-error").textContent).toMatch(/Deposit failed/);
   });
 
+  it("retries the deposit step without re-signing when the receipt fetch fails transiently", async () => {
+    // Reproduces the real-world MiniPay case: eth_getTransactionReceipt
+    // throws (RPC hasn't caught up with the just-sent tx yet) even
+    // though the tx is genuinely mined. Clicking "Retry" must NOT call
+    // eth_sendTransaction again — that would double-charge the user.
+    let receiptCallCount = 0;
+    const sendTransactionSpy = vi.fn().mockResolvedValue(TX_HASH);
+    Object.defineProperty(window, "ethereum", {
+      value: {
+        request: vi.fn().mockImplementation(async ({ method }: { method: string }) => {
+          if (method === "eth_chainId") return "0xa4ec";
+          if (method === "eth_blockNumber") return "0x1";
+          if (method === "eth_requestAccounts") return [SENDER];
+          if (method === "eth_accounts") return [SENDER];
+          if (method === "eth_estimateGas") return "0x186a0";
+          if (method === "eth_sendTransaction") return sendTransactionSpy();
+          if (method === "eth_getTransactionReceipt") {
+            receiptCallCount += 1;
+            if (receiptCallCount === 1) {
+              throw new Error(
+                `Transaction receipt with hash "${TX_HASH}" could not be found. ` +
+                  "The Transaction may not be processed on a block yet.",
+              );
+            }
+            return {
+              status: "success",
+              to: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+              from: SENDER,
+              transactionHash: TX_HASH,
+              logs: [],
+            };
+          }
+          throw new Error("unreachable: " + method);
+        }),
+      },
+      configurable: true,
+      writable: true,
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, balanceUSD: 0.1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const onSuccess = vi.fn();
+    render(
+      <StakeConfirmDialog
+        open
+        stakeUSD={0.1}
+        treasury={TREASURY}
+        senderAddress={SENDER}
+        depositServerUrl="https://example.test"
+        onClose={() => {}}
+        onSuccess={onSuccess}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("stake-confirm-button"));
+    await waitFor(() => expect(screen.getByTestId("stake-error")).toBeInTheDocument());
+    expect(sendTransactionSpy).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("stake-confirm-button"));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith(TX_HASH));
+    expect(sendTransactionSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces the user rejection when they cancel the tx signing", async () => {
     Object.defineProperty(window, "ethereum", {
       value: {
