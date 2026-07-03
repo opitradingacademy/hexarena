@@ -131,8 +131,11 @@ export async function handleDepositRequest(
   // The user can hit this endpoint (or the client polls it after Retry)
   // to confirm whether the deposit eventually credited.
   if (url.pathname === "/api/balance") {
+    console.log(`[HexArena:server:balance] entered /api/balance handler`);
     const walletParam = url.searchParams.get("wallet");
+    console.log(`[HexArena:server:balance] walletParam=${walletParam ?? "<null>"}`);
     if (!walletParam || !isAddress(walletParam)) {
+      console.log(`[HexArena:server:balance] rejecting: invalid wallet`);
       respond(res, 400, {
         ok: false,
         code: "BAD_REQUEST",
@@ -141,13 +144,17 @@ export async function handleDepositRequest(
       return true;
     }
     const normalized = getAddress(walletParam);
+    console.log(`[HexArena:server:balance] normalized=${normalized} — calling store.upsertUser`);
     // upsertUser makes balanceOf safe — a zero-balance query still
     // returns 0 instead of NaN.
     store.upsertUser(normalized, normalized);
+    const balance = store.balanceOf(normalized);
+    console.log(`[HexArena:server:balance] balanceUSD=${balance} — calling respond`);
     respond(res, 200, {
       ok: true,
-      balanceUSD: store.balanceOf(normalized),
+      balanceUSD: balance,
     });
+    console.log(`[HexArena:server:balance] respond called — finished ${url.pathname}`);
     return true;
   }
 
