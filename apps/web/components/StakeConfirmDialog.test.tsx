@@ -224,6 +224,58 @@ describe("StakeConfirmDialog", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("recovers the txHash and retries without re-signing when MiniPay's own confirmation wait fails during signing", async () => {
+    // Real production case: MiniPay's provider internally waits for the
+    // receipt before eth_sendTransaction resolves, and throws viem's
+    // TransactionReceiptNotFoundError (with the txHash embedded in the
+    // message) instead of returning the hash. That lands in the FIRST
+    // catch block (around submitUsdtTransfer), which previously had no
+    // txHash to reuse — Retry re-signed a brand-new tx every time,
+    // double- and triple-charging the user.
+    let sendCallCount = 0;
+    Object.defineProperty(window, "ethereum", {
+      value: {
+        request: vi.fn().mockImplementation(async ({ method }: { method: string }) => {
+          if (method === "eth_chainId") return "0xa4ec";
+          if (method === "eth_blockNumber") return "0x1";
+          if (method === "eth_requestAccounts") return [SENDER];
+          if (method === "eth_accounts") return [SENDER];
+          if (method === "eth_estimateGas") return "0x186a0";
+          if (method === "eth_sendTransaction") {
+            sendCallCount += 1;
+            throw new Error(
+              `Transaction receipt with hash "${TX_HASH}" could not be found. ` +
+                "The Transaction may not be processed on a block yet. Version: viem@2.54.1",
+            );
+          }
+          throw new Error("unreachable: " + method);
+        }),
+      },
+      configurable: true,
+      writable: true,
+    });
+    render(
+      <StakeConfirmDialog
+        open
+        stakeUSD={0.1}
+        treasury={TREASURY}
+        senderAddress={SENDER}
+        depositServerUrl="https://example.test"
+        onClose={() => {}}
+        onSuccess={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("stake-confirm-button"));
+    await waitFor(() => expect(screen.getByTestId("stake-error")).toBeInTheDocument());
+    expect(sendCallCount).toBe(1);
+
+    fireEvent.click(screen.getByTestId("stake-confirm-button"));
+    await waitFor(() => expect(screen.getByTestId("stake-error")).toBeInTheDocument());
+    // Retry must NOT call eth_sendTransaction again — the hash was
+    // already recovered from the first error's message.
+    expect(sendCallCount).toBe(1);
+  });
+
   it("surfaces the user rejection when they cancel the tx signing", async () => {
     Object.defineProperty(window, "ethereum", {
       value: {

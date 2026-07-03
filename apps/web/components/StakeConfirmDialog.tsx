@@ -87,6 +87,18 @@ export function StakeConfirmDialog({
         });
       } catch (e) {
         const msg = (e as Error).message || "Tx rejected";
+        // MiniPay's own provider sometimes waits for the receipt
+        // internally before resolving eth_sendTransaction, and throws
+        // viem's TransactionReceiptNotFoundError instead of returning
+        // the hash — even though the tx was genuinely broadcast (the
+        // hash is embedded in the error message). Recover it and treat
+        // this like a server-error so Retry resumes instead of signing
+        // a brand-new tx (which would double-charge the user).
+        const recoveredHash = msg.match(/0x[0-9a-fA-F]{64}/)?.[0] as `0x${string}` | undefined;
+        if (recoveredHash) {
+          setStatus({ kind: "server-error", txHash: recoveredHash, code: "NETWORK", msg });
+          return;
+        }
         setStatus({ kind: "client-error", msg });
         return;
       }
