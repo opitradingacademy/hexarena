@@ -16,6 +16,7 @@ import { Matchmaker, type QueueEntry } from "./matchmaking";
 import { MatchSession } from "./matchSession";
 import { handleDepositRequest } from "./depositEndpoint";
 import type { VerifyDepositProvider } from "./chain/verifyDeposit";
+import { applyCorsHeaders } from "./cors";
 
 /**
  * Minimal shape of a viem PublicClient that verifyDeposit needs.
@@ -29,6 +30,12 @@ export type CreateServerOpts = {
   treasuryAddress: `0x${string}`;
   /** viem public client for reading tx receipts. Required for /api/deposit. */
   publicClient: CeloPublicClient;
+  /**
+   * Allowed origin for CORS. Defaults to '*' which is fine for an MVP
+   * that only serves the hexarena Mini App. Pass the deployed Vercel
+   * URL to lock down further.
+   */
+  corsOrigin?: string | "*";
 };
 
 export function createServer(httpServer: HttpServer, store: LedgerStore, opts: CreateServerOpts) {
@@ -43,6 +50,19 @@ export function createServer(httpServer: HttpServer, store: LedgerStore, opts: C
   // HTTP request dispatcher — single hand-off point for all REST endpoints.
   httpServer.on("request", async (req, res) => {
     const url = new URL(req.url ?? "", "http://localhost");
+    const corsOrigin: string | "*" = opts.corsOrigin ?? "*";
+    const corsHeaders: Record<string, string | string[] | undefined> = {};
+    applyCorsHeaders(corsHeaders, corsOrigin);
+
+    // CORS preflight — the MiniPay WebView sends OPTIONS before the
+    // POST /api/deposit when the origin (Vercel) differs from the API
+    // (Railway). Without handling OPTIONS explicitly the browser blocks
+    // the actual request.
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, corsHeaders);
+      res.end();
+      return;
+    }
 
     // POST /api/deposit — credit ledger with on-chain USDT transfer (see
     // depositEndpoint.ts NatSpec for the full contract).
@@ -59,7 +79,10 @@ export function createServer(httpServer: HttpServer, store: LedgerStore, opts: C
     const match = url.pathname.match(/^\/matches\/([^/]+)$/);
     if (req.method === "GET" && match) {
       const userId = decodeURIComponent(match[1]);
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        ...corsHeaders,
+      });
       res.end(JSON.stringify(store.matchHistoryFor(userId)));
     }
   });

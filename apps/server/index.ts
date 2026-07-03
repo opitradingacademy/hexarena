@@ -21,6 +21,7 @@ const treasuryAddress = validateTreasuryAddress(process.env.ARENA_TREASURY_ADDRE
 createServer(httpServer, store, {
   treasuryAddress,
   publicClient,
+  corsOrigin: process.env.ARENA_CORS_ORIGIN ?? "https://web-taupe-alpha-23.vercel.app",
 });
 
 const port = Number(process.env.PORT ?? 3001);

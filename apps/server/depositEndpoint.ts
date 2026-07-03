@@ -28,6 +28,7 @@ import {
   type VerifyDepositProvider,
 } from "./chain/verifyDeposit";
 import type { LedgerStore } from "./ledger/types";
+import { applyCorsHeaders } from "./cors";
 
 export type DepositEndpointConfig = {
   treasury: `0x${string}`;
@@ -129,7 +130,11 @@ export async function handleDepositRequest(
 }
 
 function respond(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "Content-Type": "application/json" });
+  const headers: Record<string, string | string[] | undefined> = {
+    "Content-Type": "application/json",
+  };
+  applyCorsHeaders(headers, "*");
+  res.writeHead(status, headers);
   res.end(JSON.stringify(body));
 }
 
