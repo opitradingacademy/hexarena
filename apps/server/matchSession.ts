@@ -16,6 +16,7 @@ import {
   type GameState,
   type PlayerId,
 } from "@hexarena/shared/domain/board";
+import { chooseBotMove, BOT_USER_ID } from "@hexarena/shared/domain/bot";
 import {
   DISCONNECT_GRACE_MS,
   type GameMode,
@@ -34,6 +35,8 @@ export type MatchSessionDeps = {
   stake: number;
   players: Record<PlayerId, UserId>;
   store: LedgerStore;
+  /** Which color, if any, is played by the local bot (CASUAL only). */
+  botPlayer?: PlayerId;
   /** Called for room-wide broadcasts and single-recipient emits alike. */
   emit: (userId: UserId | "*", event: string, payload: unknown) => void;
   /** Injectable for tests; defaults to real timers. */
@@ -44,6 +47,8 @@ export type MatchSessionDeps = {
 };
 
 const TICK_MS = 1000;
+/** Delay before the bot plays its move — feels less robotic than instant. */
+const BOT_MOVE_DELAY_MS = 700;
 
 function reasonFor(end: { reason?: "majority" | "draw" | "timeout" }): GameOverReason {
   return end.reason === "timeout" ? "timeout" : (end.reason ?? "majority");
@@ -55,6 +60,7 @@ export class MatchSession {
   readonly stake: number;
   readonly players: Record<PlayerId, UserId>;
   state: GameState;
+  private readonly botPlayer?: PlayerId;
   private store: LedgerStore;
   private emit: MatchSessionDeps["emit"];
   private setTimeoutFn: typeof setTimeout;
@@ -72,6 +78,7 @@ export class MatchSession {
     this.mode = deps.mode;
     this.stake = deps.stake;
     this.players = deps.players;
+    this.botPlayer = deps.botPlayer;
     this.store = deps.store;
     this.emit = deps.emit;
     this.setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
@@ -115,12 +122,26 @@ export class MatchSession {
         this.finalize(reasonFor(end), end.winner ?? null);
       }
     }, TICK_MS);
+
+    this.maybeScheduleBotMove();
   }
 
   private playerIdFor(userId: UserId): PlayerId | undefined {
     if (this.players.P1 === userId) return "P1";
     if (this.players.P2 === userId) return "P2";
     return undefined;
+  }
+
+  /** If it's the bot's turn, schedule its move after a short human-like delay. */
+  private maybeScheduleBotMove(): void {
+    if (this.finished || !this.botPlayer || this.state.turn !== this.botPlayer) return;
+    const botPlayer = this.botPlayer;
+    this.setTimeoutFn(() => {
+      if (this.finished) return;
+      const move = chooseBotMove(this.state, botPlayer);
+      if (!move) return;
+      this.makeMove(BOT_USER_ID, move);
+    }, BOT_MOVE_DELAY_MS);
   }
 
   makeMove(userId: UserId, at: { q: number; r: number }): void {
@@ -151,6 +172,8 @@ export class MatchSession {
     const end = checkEnd(this.state);
     if (end.over) {
       this.finalize(reasonFor(end), end.winner ?? null);
+    } else {
+      this.maybeScheduleBotMove();
     }
   }
 

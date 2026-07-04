@@ -8,6 +8,7 @@
   "exports": {
     ".": "./domain/board.ts",
     "./domain/board": "./domain/board.ts",
+    "./domain/bot": "./domain/bot.ts",
     "./protocol": "./protocol/index.ts",
     "./chain": "./chain/index.ts"
   },

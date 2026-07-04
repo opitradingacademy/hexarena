@@ -10,6 +10,7 @@ import { createPublicClient, http, isAddress, getAddress, type PublicClient } fr
 import { celo } from "viem/chains";
 import type { ClientToServerEvents, ServerToClientEvents } from "@hexarena/shared/protocol";
 import { serializeGameState, type PlayerId } from "@hexarena/shared/domain/board";
+import { BOT_USER_ID } from "@hexarena/shared/domain/bot";
 import type { LedgerStore, UserId } from "./ledger/types";
 import { balanceOf } from "./ledger/ledger";
 import { Matchmaker, type QueueEntry } from "./matchmaking";
@@ -24,6 +25,9 @@ import { applyCorsHeaders } from "./cors";
  * chain plumbing and lets the server inject its real RPC client.
  */
 type CeloPublicClient = Pick<PublicClient, "getTransactionReceipt">;
+
+/** How long a CASUAL queue entry waits for a human before falling back to the bot. */
+const BOT_FALLBACK_MS = 10_000;
 
 export type CreateServerOpts = {
   /** Treasury address that receives user Arena stakes. Required for /api/deposit. */
@@ -55,6 +59,8 @@ export type CreateServerOpts = {
    * URL to lock down further.
    */
   corsOrigin?: string | "*";
+  /** Injectable for tests; defaults to BOT_FALLBACK_MS (10s). */
+  botFallbackMs?: number;
 };
 
 export function createServer(
@@ -65,6 +71,7 @@ export function createServer(
   const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     cors: { origin: "*" },
   });
+  const botFallbackMs = opts.botFallbackMs ?? BOT_FALLBACK_MS;
 
   // Make /api/deposit a no-op (no provider-stub) when createServer is
   // called without deposit wiring — needed by unit tests that don't
@@ -192,6 +199,71 @@ export function createServer(
   const socketsByUser = new Map<UserId, Socket>();
   /** userId -> matchId, so disconnect/resume/make_move/resign know which session to use. */
   const activeMatchByUser = new Map<UserId, string>();
+  /** userId -> pending "no human showed up" bot-fallback timer for CASUAL queue entries. */
+  const botFallbackTimers = new Map<UserId, ReturnType<typeof setTimeout>>();
+
+  function clearBotFallback(userId: UserId): void {
+    const timer = botFallbackTimers.get(userId);
+    if (timer) {
+      clearTimeout(timer);
+      botFallbackTimers.delete(userId);
+    }
+  }
+
+  /** Creates and wires a MatchSession for `players`, then notifies each player's own socket. */
+  function createMatchSession(
+    players: Record<PlayerId, UserId>,
+    mode: "CASUAL" | "ARENA",
+    stake: number,
+    botPlayer?: PlayerId,
+  ): void {
+    const matchId = randomUUID();
+
+    const session = new MatchSession({
+      matchId,
+      mode,
+      stake,
+      players,
+      store,
+      botPlayer,
+      emit: (targetUser, event, evtPayload) => {
+        // Bridging a generic (event, payload) emit into socket.io's
+        // per-event typed overloads.
+        const emitAny = (
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          target: { emit: (...args: any[]) => unknown },
+        ) => target.emit(event, evtPayload);
+        if (targetUser === "*") {
+          emitAny(io.to(matchId));
+        } else {
+          const target = socketsByUser.get(targetUser);
+          if (target) emitAny(target);
+        }
+      },
+    });
+    sessions.set(matchId, session);
+
+    for (const [color, playerUserId] of Object.entries(players) as [PlayerId, UserId][]) {
+      if (playerUserId === BOT_USER_ID) continue;
+      activeMatchByUser.set(playerUserId, matchId);
+      const socket = socketsByUser.get(playerUserId);
+      if (!socket) continue;
+      socket.join(matchId);
+      const opponentColor: PlayerId = color === "P1" ? "P2" : "P1";
+      socket.emit("match_found", {
+        matchId,
+        opponent: players[opponentColor],
+        color,
+        initialState: serializeGameState(session.state),
+        matchClockMs: session.state.matchClockMs,
+      });
+    }
+  }
+
+  /** Starts a solo CASUAL match against the local bot (P2), skipping the queue entirely. */
+  function startBotMatch(humanUserId: UserId): void {
+    createMatchSession({ P1: humanUserId, P2: BOT_USER_ID }, "CASUAL", 0, "P2");
+  }
 
   function userIdFor(socket: Socket): UserId {
     // Wallet-auth (MVP): the client declares its address via
@@ -230,53 +302,39 @@ export function createServer(
       const pair = matchmaker.join(entry);
       socket.emit("queue_joined", {});
 
-      if (!pair) return;
+      if (!pair) {
+        // No human opponent waiting — CASUAL entries fall back to the local
+        // bot after a short wait so a new/lone user isn't stuck staring at
+        // a spinner. ARENA never falls back (it involves real stakes).
+        if (payload.mode === "CASUAL") {
+          clearBotFallback(userId);
+          botFallbackTimers.set(
+            userId,
+            setTimeout(() => {
+              botFallbackTimers.delete(userId);
+              // Only start the bot match if this user is still queued
+              // (matchmaker.cancel returns true iff it found+removed them).
+              if (matchmaker.cancel(userId)) startBotMatch(userId);
+            }, botFallbackMs),
+          );
+        }
+        return;
+      }
 
       const [a, b] = pair;
-      const matchId = randomUUID();
+      clearBotFallback(a.userId);
+      clearBotFallback(b.userId);
       const players: Record<PlayerId, UserId> = { P1: a.userId, P2: b.userId };
+      createMatchSession(players, a.mode, a.stake ?? 0);
+    });
 
-      const session = new MatchSession({
-        matchId,
-        mode: a.mode,
-        stake: a.stake ?? 0,
-        players,
-        store,
-        emit: (targetUser, event, evtPayload) => {
-          // Bridging a generic (event, payload) emit into socket.io's
-          // per-event typed overloads.
-          const emitAny = (
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            target: { emit: (...args: any[]) => unknown },
-          ) => target.emit(event, evtPayload);
-          if (targetUser === "*") {
-            emitAny(io.to(matchId));
-          } else {
-            const target = socketsByUser.get(targetUser);
-            if (target) emitAny(target);
-          }
-        },
-      });
-      sessions.set(matchId, session);
-
-      for (const p of [a, b]) {
-        activeMatchByUser.set(p.userId, matchId);
-        socketsByUser.get(p.userId)?.join(matchId);
-      }
-
-      for (const [p, color] of [[a, "P1"] as const, [b, "P2"] as const]) {
-        socketsByUser.get(p.userId)?.emit("match_found", {
-          matchId,
-          opponent: p === a ? b.userId : a.userId,
-          color,
-          initialState: serializeGameState(session.state),
-          matchClockMs: session.state.matchClockMs,
-        });
-      }
+    socket.on("play_vs_bot", () => {
+      startBotMatch(userId);
     });
 
     socket.on("cancel_queue", () => {
       matchmaker.cancel(userId);
+      clearBotFallback(userId);
     });
 
     socket.on("make_move", ({ matchId, at }) => {
@@ -294,6 +352,7 @@ export function createServer(
 
     socket.on("disconnect", () => {
       socketsByUser.delete(userId);
+      clearBotFallback(userId);
       const matchId = activeMatchByUser.get(userId);
       if (matchId) sessions.get(matchId)?.disconnect(userId);
     });

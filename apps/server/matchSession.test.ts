@@ -3,22 +3,30 @@ import { MatchSession } from "./matchSession";
 import { MemoryLedgerStore } from "./ledger/memoryStore";
 import { creditDeposit, balanceOf } from "./ledger/ledger";
 import { DISCONNECT_GRACE_MS } from "@hexarena/shared/protocol";
+import { BOT_USER_ID } from "@hexarena/shared/domain/bot";
+import { legalMoves, type PlayerId } from "@hexarena/shared/domain/board";
 
-function makeSession(mode: "CASUAL" | "ARENA", stake = 0.1) {
+function makeSession(
+  mode: "CASUAL" | "ARENA",
+  stake = 0.1,
+  opts: { botPlayer?: PlayerId; p2?: string } = {},
+) {
   const store = new MemoryLedgerStore();
+  const p2 = opts.p2 ?? "p2";
   store.upsertUser("p1", "0x1");
-  store.upsertUser("p2", "0x2");
+  store.upsertUser(p2, "0x2");
   if (mode === "ARENA") {
     creditDeposit(store, "p1", "0xtxp1", stake);
-    creditDeposit(store, "p2", "0xtxp2", stake);
+    creditDeposit(store, p2, "0xtxp2", stake);
   }
   const events: { userId: string; event: string; payload: unknown }[] = [];
   const session = new MatchSession({
     matchId: "m1",
     mode,
     stake,
-    players: { P1: "p1", P2: "p2" },
+    players: { P1: "p1", P2: p2 },
     store,
+    botPlayer: opts.botPlayer,
     emit: (userId, event, payload) => events.push({ userId: userId as string, event, payload }),
   });
   return { session, store, events };
@@ -119,5 +127,40 @@ describe("MatchSession — Shared Match Clock (shared-match-timer)", () => {
     const gameOver = events.find((e) => e.event === "game_over")!;
     expect(gameOver.payload).toMatchObject({ winner: null, reason: "timeout" });
     void session;
+  });
+});
+
+describe("MatchSession — local bot opponent (CASUAL)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("makes an automatic move for the bot after the human plays, once the delay elapses", () => {
+    const { session, events } = makeSession("CASUAL", 0, { botPlayer: "P2", p2: BOT_USER_ID });
+    const moves = events.filter((e) => e.event === "move_result");
+    expect(moves).toHaveLength(0);
+
+    const legalP1Move = legalMoves(session.state, "P1")[0];
+    session.makeMove("p1", legalP1Move);
+    expect(session.state.turn).toBe("P2");
+
+    // Bot hasn't moved yet — it's waiting out BOT_MOVE_DELAY_MS.
+    expect(events.filter((e) => e.event === "move_result")).toHaveLength(1);
+
+    vi.advanceTimersByTime(1000);
+
+    const afterBot = events.filter((e) => e.event === "move_result");
+    expect(afterBot).toHaveLength(2);
+    expect(afterBot[1].payload).toMatchObject({ by: "P2" });
+    expect(session.state.turn).toBe("P1");
+  });
+
+  it("never schedules a bot move once the match is finished", () => {
+    const { session, events } = makeSession("CASUAL", 0, { botPlayer: "P2", p2: BOT_USER_ID });
+    session.resign("p1");
+    events.length = 0;
+
+    vi.advanceTimersByTime(5000);
+
+    expect(events.filter((e) => e.event === "move_result")).toHaveLength(0);
   });
 });

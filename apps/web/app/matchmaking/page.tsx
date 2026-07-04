@@ -128,6 +128,12 @@ function MatchmakingScreen() {
     getSocket().emit("cancel_queue", {});
   }
 
+  function handlePlayVsBot() {
+    setServerError(null);
+    setStatus("searching");
+    getSocket().emit("play_vs_bot");
+  }
+
   async function handleStakeConfirmed() {
     // Production 2026-07-03 UX fix: after a successful deposit tx,
     // do NOT auto-resume the matchmaking flow on the client. Wait
@@ -203,6 +209,11 @@ function MatchmakingScreen() {
           <p className="text-sm font-semibold uppercase tracking-wide text-arena-cyan">
             Searching for opponent…
           </p>
+          {mode === "CASUAL" && (
+            <p className="text-center text-xs text-slate-400">
+              No opponent yet? You&rsquo;ll be matched with the computer in a few seconds.
+            </p>
+          )}
           <button
             type="button"
             onClick={handleCancel}
@@ -212,14 +223,25 @@ function MatchmakingScreen() {
           </button>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={handleSearch}
-          disabled={mode === "ARENA" && stake == null}
-          className="mt-8 w-full rounded-xl bg-arena-magenta py-3 text-sm font-bold uppercase text-white shadow-neonMagenta transition disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          Find match
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={handleSearch}
+            disabled={mode === "ARENA" && stake == null}
+            className="mt-8 w-full rounded-xl bg-arena-magenta py-3 text-sm font-bold uppercase text-white shadow-neonMagenta transition disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            Find match
+          </button>
+          {mode === "CASUAL" && (
+            <button
+              type="button"
+              onClick={handlePlayVsBot}
+              className="mt-3 w-full rounded-xl border border-arena-cyan/60 py-3 text-sm font-bold uppercase text-arena-cyan transition"
+            >
+              Play vs Computer
+            </button>
+          )}
+        </>
       )}
 
       <MatchmakingDepositDialog

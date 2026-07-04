@@ -10,6 +10,7 @@ import {
   type PlayerId,
 } from "@hexarena/shared/domain/board";
 import type { GameOverPayload } from "@hexarena/shared/protocol";
+import { BOT_USER_ID } from "@hexarena/shared/domain/bot";
 import { HexBoard, PIECE_COLOR, PIECE_COLOR_NAME } from "../../../components/HexBoard";
 import { MatchClock } from "../../../components/MatchClock";
 import { PlayerStatusRow } from "../../../components/PlayerStatusRow";
@@ -29,9 +30,12 @@ export default function GamePage() {
   const matchId = params.matchId;
   const selfColor = (searchParams.get("color") as PlayerId | null) ?? "P1";
   const opponentId = searchParams.get("opponent");
-  const opponentLabel = opponentId
-    ? `Opponent #${opponentId.slice(0, 4).toUpperCase()}`
-    : "Opponent";
+  const opponentLabel =
+    opponentId === BOT_USER_ID
+      ? "HexArena Bot"
+      : opponentId
+        ? `Opponent #${opponentId.slice(0, 4).toUpperCase()}`
+        : "Opponent";
 
   const [state, setState] = useState<GameState>(createGame());
   const [gameOver, setGameOver] = useState<GameOverPayload | null>(null);

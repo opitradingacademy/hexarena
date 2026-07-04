@@ -37,6 +37,8 @@ export type ResumePayload = {
 export type ClientToServerEvents = {
   join_queue: (payload: JoinQueuePayload) => void;
   cancel_queue: (payload: CancelQueuePayload) => void;
+  /** Skips the queue entirely — starts an immediate solo CASUAL match against the local bot. */
+  play_vs_bot: () => void;
   make_move: (payload: MakeMovePayload) => void;
   resign: (payload: ResignPayload) => void;
   resume: (payload: ResumePayload) => void;
