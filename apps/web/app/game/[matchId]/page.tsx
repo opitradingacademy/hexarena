@@ -5,9 +5,11 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { createGame, deserializeGameState, type Axial, type GameState, type PlayerId } from "@hexarena/shared/domain/board";
 import type { GameOverPayload } from "@hexarena/shared/protocol";
 import { HexBoard, PIECE_COLOR, PIECE_COLOR_NAME } from "../../../components/HexBoard";
-import { PlayerClock } from "../../../components/PlayerClock";
+import { MatchClock } from "../../../components/MatchClock";
+import { PlayerStatusRow } from "../../../components/PlayerStatusRow";
 import { ResultBanner } from "../../../components/ResultBanner";
 import { getSocket } from "../../../lib/socketSingleton";
+import { countPieces } from "../../../lib/captureCount";
 
 /**
  * In-game board screen (design.md wireframe "3. In-Game Board").
@@ -33,16 +35,21 @@ export default function GamePage() {
     function onMoveResult(payload: { nextState: Parameters<typeof deserializeGameState>[0] }) {
       setState(deserializeGameState(payload.nextState));
     }
+    function onClockTick(payload: { matchClockMs: number }) {
+      setState((prev) => ({ ...prev, matchClockMs: payload.matchClockMs }));
+    }
     function onGameOver(payload: GameOverPayload) {
       setGameOver(payload);
     }
 
     socket.on("move_result", onMoveResult);
+    socket.on("clock_tick", onClockTick);
     socket.on("game_over", onGameOver);
     socket.emit("resume", { matchId });
 
     return () => {
       socket.off("move_result", onMoveResult);
+      socket.off("clock_tick", onClockTick);
       socket.off("game_over", onGameOver);
     };
   }, [matchId]);
@@ -71,12 +78,14 @@ export default function GamePage() {
   }
 
   const opponentColor: PlayerId = selfColor === "P1" ? "P2" : "P1";
+  const captureCounts = countPieces(state.board);
 
   return (
     <main className="mx-auto flex max-w-md flex-col gap-4 px-4 pt-6">
-      <PlayerClock
+      <MatchClock matchClockMs={state.matchClockMs} />
+      <PlayerStatusRow
         label={opponentLabel}
-        remainingMs={state.clocks[opponentColor]}
+        captureCount={captureCounts[opponentColor]}
         isTurn={state.turn === opponentColor}
         isSelf={false}
         pieceColorClassName={PIECE_COLOR[opponentColor]}
@@ -84,9 +93,9 @@ export default function GamePage() {
       <div className="overflow-x-auto py-2">
         <HexBoard state={state} onCellClick={handleCellClick} />
       </div>
-      <PlayerClock
+      <PlayerStatusRow
         label={`You (${PIECE_COLOR_NAME[selfColor]})`}
-        remainingMs={state.clocks[selfColor]}
+        captureCount={captureCounts[selfColor]}
         isTurn={state.turn === selfColor}
         isSelf
         pieceColorClassName={PIECE_COLOR[selfColor]}
