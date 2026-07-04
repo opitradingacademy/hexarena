@@ -23,12 +23,14 @@ describe("HexBoard", () => {
     expect(onCellClick).toHaveBeenCalledWith({ q: 0, r: 0 });
   });
 
-  it("uses the gold hex fill and dark piece outline for high contrast against bg-arena-bg", () => {
+  it("uses the gold hex fill and dark piece stroke for high contrast against bg-arena-bg", () => {
     render(<HexBoard state={createGame()} />);
     const emptyCell = screen.getByTestId("cell-0,0");
-    expect(emptyCell.className).toContain("bg-arena-gold");
+    const polygon = emptyCell.querySelector("polygon");
+    expect(polygon?.getAttribute("fill")).toBe("#ffcf3f");
+    expect(polygon?.getAttribute("stroke")).toBe("#0b0d17");
     const p1Cell = screen.getByTestId("cell--2,0");
-    const p1Piece = p1Cell.querySelector("span");
-    expect(p1Piece?.className).toContain("outline-arena-bg");
+    const p1Piece = p1Cell.querySelector("circle");
+    expect(p1Piece?.getAttribute("stroke")).toBe("#0b0d17");
   });
 });

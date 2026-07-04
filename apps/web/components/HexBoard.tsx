@@ -9,19 +9,31 @@ export type HexBoardProps = {
   capturedKeys?: string[];
 };
 
-const HEX_SIZE_MOBILE = 20; // px, center-to-corner radius (mobile default)
-const HEX_SIZE_DESKTOP_MIN = 22; // floor for desktop — keep parity with mobile
-const HEX_SIZE_DESKTOP_MAX = 32; // ceiling — board never exceeds ~553px wide
+const HEX_SIZE_MOBILE = 20;
+const HEX_SIZE_DESKTOP_MIN = 22;
+const HEX_SIZE_DESKTOP_MAX = 32;
 const BOARD_RADIUS = 4;
 const SQRT3 = Math.sqrt(3);
-const ASPECT = (BOARD_RADIUS + 1) * SQRT3 * 2; // board width per unit hexSize
+const ASPECT = (BOARD_RADIUS + 1) * SQRT3 * 2;
 
-function computeBoardSize(hexSize: number) {
-  const hexW = SQRT3 * hexSize;
-  const hexH = 2 * hexSize;
-  const center = (BOARD_RADIUS + 1) * hexW;
-  const boardSize = center * 2;
-  return { hexW, hexH, center, boardSize };
+const FILL_GOLD = "#ffcf3f";
+const FILL_MAGENTA_SOFT = "rgba(255, 47, 208, 0.4)";
+const FILL_CYAN = "#00f0ff";
+const FILL_MAGENTA = "#ff2fd0";
+const STROKE_DARK = "#0b0d17";
+const STROKE_PICKER = "#0b0d17";
+
+function hexCornerPoints(cx: number, cy: number, size: number): string {
+  // Pointy-top hex: corners at angles 30°, 90°, 150°, 210°, 270°, 330°
+  const points: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const angleDeg = 60 * i - 30;
+    const angleRad = (Math.PI / 180) * angleDeg;
+    const x = cx + size * Math.cos(angleRad);
+    const y = cy + size * Math.sin(angleRad);
+    points.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+  }
+  return points.join(" ");
 }
 
 export const PIECE_COLOR: Record<"P1" | "P2", string> = {
@@ -36,22 +48,21 @@ export const PIECE_COLOR_NAME: Record<"P1" | "P2", string> = {
 
 export const HEX_BOARD_MOBILE_BOARD_SIZE = computeBoardSize(HEX_SIZE_MOBILE).boardSize;
 
+function computeBoardSize(hexSize: number) {
+  const hexW = SQRT3 * hexSize;
+  const center = (BOARD_RADIUS + 1) * hexW;
+  const boardSize = center * 2;
+  return { hexW, center, boardSize };
+}
+
 /**
  * Hex board renderer for the in-game screen (design.md "3. In-Game Board").
- * Renders all 61 radius-4 axial cells in a real pointy-top hexagonal layout
- * (axial -> pixel projection), each cell clipped into a hexagon shape.
  *
- * Responsive sizing:
- *   - mobile (<640px viewport): fixed HEX_SIZE_MOBILE (~346px board). The
- *     mobile container max-w-md (448px) gives enough room and keeps hexes
- *     crisp.
- *   - desktop (≥640px viewport): hexSize scales with viewport width, capped
- *     between HEX_SIZE_DESKTOP_MIN and HEX_SIZE_DESKTOP_MAX. This stops the
- *     board from looking lost on wide viewports.
- *
- * Threshold is `window.innerWidth`, NOT the container width, because the
- * game page wraps HexBoard in `max-w-md` (~416px) — measuring the container
- * would always return a mobile-sized width and the board would never scale.
+ * Each cell is rendered as an inline SVG `<polygon>` with the 6 corner
+ * points computed analytically for pointy-top hexagons. This is a true
+ * geometric hexagon (not a clip-path approximation) so the diagonals
+ * render correctly at any size, and the dark stroke between adjacent
+ * cells produces the visible hex grid the user asked for.
  */
 export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: HexBoardProps) {
   const cells = toDisplayCells(state);
@@ -61,12 +72,6 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
 
   useEffect(() => {
     function recompute() {
-      const el = wrapRef.current;
-      if (!el) return;
-      // Use the viewport width, NOT the container width: the game page
-      // wraps HexBoard in a div with `max-w-md` (~416px), so container
-      // width would always be under the desktop threshold and the board
-      // would never scale up. Viewport width is the correct signal.
       const vw = window.innerWidth;
       if (vw < 640) {
         setHexSize(HEX_SIZE_MOBILE);
@@ -81,13 +86,22 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
     return () => window.removeEventListener("resize", recompute);
   }, []);
 
-  const { hexW, hexH, center, boardSize } = computeBoardSize(hexSize);
-  const piecePx = Math.max(14, Math.min(20, hexSize * 0.7));
+  const { center, boardSize } = computeBoardSize(hexSize);
+  // Inset between cells. Pixels per hex size, ~6% of hexSize feels right.
+  const strokeWidth = Math.max(1.5, hexSize * 0.08);
+  const pieceRadius = Math.max(7, Math.min(11, hexSize * 0.4));
 
   function axialToPixel(q: number, r: number) {
     const x = hexSize * SQRT3 * (q + r / 2);
     const y = hexSize * 1.5 * r;
     return { x: x + center, y: y + center };
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<SVGGElement>, at: Axial) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onCellClick?.(at);
+    }
   }
 
   return (
@@ -96,51 +110,55 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
       data-testid="hex-board-wrap"
       className="flex w-full justify-center overflow-hidden"
     >
-      <div
+      <svg
         data-testid="hex-board"
         role="grid"
-        className="relative shrink-0"
-        style={{ width: boardSize, height: boardSize }}
+        width={boardSize}
+        height={boardSize}
+        viewBox={`0 0 ${boardSize} ${boardSize}`}
+        className="shrink-0"
       >
         {cells.map((cell) => {
           const { x, y } = axialToPixel(cell.q, cell.r);
           const isLastMove = lastMove && lastMove.q === cell.q && lastMove.r === cell.r;
           const isCaptured = capturedSet.has(cell.key);
+          const points = hexCornerPoints(x, y, hexSize);
+          const fill = isCaptured ? FILL_MAGENTA_SOFT : FILL_GOLD;
+          const stroke = isLastMove ? STROKE_PICKER : STROKE_DARK;
+          const strokeW = isLastMove ? strokeWidth * 2 : strokeWidth;
 
           return (
-            <button
+            <g
               key={cell.key}
-              type="button"
-              role="gridcell"
               data-testid={`cell-${cell.key}`}
               data-occupant={cell.occupant ?? "empty"}
+              role="gridcell"
+              tabIndex={onCellClick ? 0 : -1}
               onClick={() => onCellClick?.({ q: cell.q, r: cell.r })}
-              className={`absolute flex items-center justify-center bg-arena-gold transition active:translate-y-px ${
-                isLastMove ? "ring-2 ring-arena-bg" : ""
-              } ${isCaptured ? "animate-pulse bg-arena-magenta/40" : ""}`}
-              style={{
-                width: hexW,
-                height: hexH,
-                left: x - hexW / 2,
-                top: y - hexH / 2,
-                // 2px inset dark border drawn behind the clip-path via
-                // box-shadow — keeps the hex outline visible without
-                // getting clipped by the polygon itself.
-                boxShadow: "inset 0 0 0 2px rgba(11, 13, 23, 0.95)",
-                clipPath: "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
-              }}
+              onKeyDown={(e) => handleKeyDown(e, { q: cell.q, r: cell.r })}
+              style={{ cursor: onCellClick ? "pointer" : "default" }}
             >
+              <polygon
+                points={points}
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={strokeW}
+                strokeLinejoin="round"
+              />
               {cell.occupant && (
-                <span
-                  className={`block rounded-full outline outline-2 outline-arena-bg outline-offset-[-2px] ${PIECE_COLOR[cell.occupant]}`}
-                  aria-hidden
-                  style={{ width: piecePx, height: piecePx }}
+                <circle
+                  cx={x}
+                  cy={y}
+                  r={pieceRadius}
+                  fill={cell.occupant === "P1" ? FILL_CYAN : FILL_MAGENTA}
+                  stroke={STROKE_DARK}
+                  strokeWidth={strokeWidth}
                 />
               )}
-            </button>
+            </g>
           );
         })}
-      </div>
+      </svg>
     </div>
   );
 }
