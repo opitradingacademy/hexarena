@@ -60,9 +60,9 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
             data-testid={`cell-${cell.key}`}
             data-occupant={cell.occupant ?? "empty"}
             onClick={() => onCellClick?.({ q: cell.q, r: cell.r })}
-            className={`absolute flex items-center justify-center border border-arena-border/60 bg-arena-surface transition ${
-              isLastMove ? "ring-2 ring-arena-gold" : ""
-            } ${isCaptured ? "animate-pulse bg-arena-gold/30" : ""}`}
+            className={`absolute flex items-center justify-center border border-arena-gold/30 bg-arena-gold transition ${
+              isLastMove ? "ring-2 ring-arena-bg" : ""
+            } ${isCaptured ? "animate-pulse bg-arena-magenta/40" : ""}`}
             style={{
               width: HEX_W,
               height: HEX_H,
@@ -73,7 +73,7 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
           >
             {cell.occupant && (
               <span
-                className={`h-3.5 w-3.5 rounded-full ${PIECE_COLOR[cell.occupant]}`}
+                className={`h-3.5 w-3.5 rounded-full ring-2 ring-arena-bg ${PIECE_COLOR[cell.occupant]}`}
                 aria-hidden
               />
             )}

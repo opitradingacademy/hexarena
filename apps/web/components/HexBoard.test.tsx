@@ -22,4 +22,13 @@ describe("HexBoard", () => {
     fireEvent.click(screen.getByTestId("cell-0,0"));
     expect(onCellClick).toHaveBeenCalledWith({ q: 0, r: 0 });
   });
+
+  it("uses the gold hex fill and dark piece ring for high contrast against bg-arena-bg", () => {
+    render(<HexBoard state={createGame()} />);
+    const emptyCell = screen.getByTestId("cell-0,0");
+    expect(emptyCell.className).toContain("bg-arena-gold");
+    const p1Cell = screen.getByTestId("cell--2,0");
+    const p1Piece = p1Cell.querySelector("span");
+    expect(p1Piece?.className).toContain("ring-arena-bg");
+  });
 });
