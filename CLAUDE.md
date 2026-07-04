@@ -10,6 +10,10 @@ Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos
 - Estado del DAG: revisar `state.yaml` del cambio correspondiente antes de asumir qué fase sigue.
 - Progreso de implementación detallado: Engram, topic_key `sdd/hexarena-mvp/apply-progress` y `sdd/shared-match-timer/apply-progress`.
 
+### Hex board: fix de centrado Y + clipping en desktop (2026-07-04, resuelto)
+
+`apps/web/components/HexBoard.tsx::computeBoardSize` tenía `centerY = (BOARD_RADIUS + 1) * hexSize` (mal, dejaba el board corrido hacia arriba) — corregido a `centerY = (1.5 * BOARD_RADIUS + 1) * hexSize`, acorde a la escala `1.5 * r` que usa `axialToPixel` para Y. Además el resize handler usaba `window.innerWidth` para dimensionar el board, pero el board vive dentro de un contenedor `max-w-md` — en desktop esto producía un board más ancho que su contenedor, cortado por el `overflow-hidden` del wrapper. Ahora se mide el `clientWidth` del propio wrapper vía `ResizeObserver` (con guard para jsdom, que no lo implementa). Deployado y confirmado por el usuario en producción. Detalle completo en Engram `ui/hex-board-y-centering-bug`.
+
 ### Reglas de tiempo: reloj compartido de partida (2026-07-04, `shared-match-timer`)
 
 Reemplazado el reloj sudden-death por jugador por un **reloj único de partida** (piso 3 minutos) que corre en tiempo real sin pausar por turno. Al llegar a 0, el match termina y se puntúa **igual que un final normal de tablero** (gana quien tenga más piezas; empate en piezas = draw) — ya no pierde automáticamente quien se quedó sin tiempo. El tablero ahora muestra el conteo de piezas capturadas en vivo por jugador.

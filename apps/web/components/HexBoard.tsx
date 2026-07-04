@@ -53,12 +53,15 @@ function computeBoardSize(hexSize: number) {
   // The range of `q + r/2` across all 61 radius-4 cells is exactly
   // [-BOARD_RADIUS, +BOARD_RADIUS] (verified by enumeration). The range
   // of `r` is also [-BOARD_RADIUS, +BOARD_RADIUS], so:
-  //   x center = (BOARD_RADIUS + 0.5) * hexW   (half-cell padding each side)
-  //   y center = (BOARD_RADIUS + 1) * hexSize  (vertical radius + padding)
+  //   x center = (BOARD_RADIUS + 0.5) * hexW      (half-cell padding each side)
+  //   y center = (1.5 * BOARD_RADIUS + 1) * hexSize
+  // Y uses axialToPixel's `1.5 * r` scale (not hexW), so the outermost row
+  // (r = ±BOARD_RADIUS) sits at y = ±1.5*BOARD_RADIUS*hexSize, extending
+  // one more hexSize past that as the hex's own vertical radius.
   // boardSize is square and sized to fit the wider axis (x), which gives
   // extra vertical padding — that's fine, the hex sits centered in it.
   const centerX = (BOARD_RADIUS + 0.5) * hexW;
-  const centerY = (BOARD_RADIUS + 1) * hexSize;
+  const centerY = (1.5 * BOARD_RADIUS + 1) * hexSize;
   const boardSize = (2 * BOARD_RADIUS + 1) * hexW;
   return { hexW, centerX, centerY, boardSize };
 }
@@ -79,19 +82,24 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
   const [hexSize, setHexSize] = useState(HEX_SIZE_MOBILE);
 
   useEffect(() => {
-    function recompute() {
-      const vw = window.innerWidth;
-      if (vw < 640) {
+    const el = wrapRef.current;
+    if (!el) return;
+    function recompute(containerWidth: number) {
+      if (window.innerWidth < 640) {
         setHexSize(HEX_SIZE_MOBILE);
         return;
       }
-      const desired = vw / ASPECT;
+      const desired = containerWidth / ASPECT;
       const clamped = Math.max(HEX_SIZE_DESKTOP_MIN, Math.min(HEX_SIZE_DESKTOP_MAX, desired));
       setHexSize(clamped);
     }
-    recompute();
-    window.addEventListener("resize", recompute);
-    return () => window.removeEventListener("resize", recompute);
+    recompute(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      recompute(entries[0].contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []);
 
   const { centerX, centerY, boardSize } = computeBoardSize(hexSize);
