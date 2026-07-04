@@ -1,23 +1,8 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createGame } from "@hexarena/shared/domain/board";
 import { HexBoard } from "./HexBoard";
-
-class ResizeObserverMock {
-  observe = vi.fn();
-  unobserve = vi.fn();
-  disconnect = vi.fn();
-}
-
-beforeEach(() => {
-  (globalThis as unknown as { ResizeObserver: typeof ResizeObserverMock }).ResizeObserver =
-    ResizeObserverMock;
-});
-
-afterEach(() => {
-  delete (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver;
-});
 
 describe("HexBoard", () => {
   it("renders all 61 radius-4 cells as grid cells", () => {

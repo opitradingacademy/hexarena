@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { createGame, deserializeGameState, type Axial, type GameState, type PlayerId } from "@hexarena/shared/domain/board";
+import {
+  createGame,
+  deserializeGameState,
+  type Axial,
+  type GameState,
+  type PlayerId,
+} from "@hexarena/shared/domain/board";
 import type { GameOverPayload } from "@hexarena/shared/protocol";
 import { HexBoard, PIECE_COLOR, PIECE_COLOR_NAME } from "../../../components/HexBoard";
 import { MatchClock } from "../../../components/MatchClock";
@@ -23,7 +29,9 @@ export default function GamePage() {
   const matchId = params.matchId;
   const selfColor = (searchParams.get("color") as PlayerId | null) ?? "P1";
   const opponentId = searchParams.get("opponent");
-  const opponentLabel = opponentId ? `Opponent #${opponentId.slice(0, 4).toUpperCase()}` : "Opponent";
+  const opponentLabel = opponentId
+    ? `Opponent #${opponentId.slice(0, 4).toUpperCase()}`
+    : "Opponent";
 
   const [state, setState] = useState<GameState>(createGame());
   const [gameOver, setGameOver] = useState<GameOverPayload | null>(null);
@@ -90,7 +98,7 @@ export default function GamePage() {
         isSelf={false}
         pieceColorClassName={PIECE_COLOR[opponentColor]}
       />
-      <div className="overflow-x-auto py-2">
+      <div className="py-2">
         <HexBoard state={state} onCellClick={handleCellClick} />
       </div>
       <PlayerStatusRow

@@ -42,11 +42,16 @@ export const HEX_BOARD_MOBILE_BOARD_SIZE = computeBoardSize(HEX_SIZE_MOBILE).boa
  * (axial -> pixel projection), each cell clipped into a hexagon shape.
  *
  * Responsive sizing:
- *   - mobile (<640px): fixed HEX_SIZE_MOBILE (~346px board). The mobile
- *     container max-w-md (448px) gives enough room and keeps hexes crisp.
- *   - desktop (≥640px): hexSize scales to fit the available container
- *     width, capped between HEX_SIZE_DESKTOP_MIN and HEX_SIZE_DESKTOP_MAX.
- *     This stops the board from looking lost on wide viewports.
+ *   - mobile (<640px viewport): fixed HEX_SIZE_MOBILE (~346px board). The
+ *     mobile container max-w-md (448px) gives enough room and keeps hexes
+ *     crisp.
+ *   - desktop (≥640px viewport): hexSize scales with viewport width, capped
+ *     between HEX_SIZE_DESKTOP_MIN and HEX_SIZE_DESKTOP_MAX. This stops the
+ *     board from looking lost on wide viewports.
+ *
+ * Threshold is `window.innerWidth`, NOT the container width, because the
+ * game page wraps HexBoard in `max-w-md` (~416px) — measuring the container
+ * would always return a mobile-sized width and the board would never scale.
  */
 export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: HexBoardProps) {
   const cells = toDisplayCells(state);
@@ -55,24 +60,25 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
   const [hexSize, setHexSize] = useState(HEX_SIZE_MOBILE);
 
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
     function recompute() {
       const el = wrapRef.current;
       if (!el) return;
-      const width = el.clientWidth;
-      if (width < 640) {
+      // Use the viewport width, NOT the container width: the game page
+      // wraps HexBoard in a div with `max-w-md` (~416px), so container
+      // width would always be under the desktop threshold and the board
+      // would never scale up. Viewport width is the correct signal.
+      const vw = window.innerWidth;
+      if (vw < 640) {
         setHexSize(HEX_SIZE_MOBILE);
         return;
       }
-      const desired = width / ASPECT;
+      const desired = vw / ASPECT;
       const clamped = Math.max(HEX_SIZE_DESKTOP_MIN, Math.min(HEX_SIZE_DESKTOP_MAX, desired));
       setHexSize(clamped);
     }
     recompute();
-    const ro = new ResizeObserver(recompute);
-    ro.observe(el);
-    return () => ro.disconnect();
+    window.addEventListener("resize", recompute);
+    return () => window.removeEventListener("resize", recompute);
   }, []);
 
   const { hexW, hexH, center, boardSize } = computeBoardSize(hexSize);
