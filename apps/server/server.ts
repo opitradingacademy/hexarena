@@ -270,7 +270,7 @@ export function createServer(
           opponent: p === a ? b.userId : a.userId,
           color,
           initialState: serializeGameState(session.state),
-          clocks: session.state.clocks,
+          matchClockMs: session.state.matchClockMs,
         });
       }
     });

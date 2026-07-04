@@ -4,7 +4,8 @@
  * Socket.IO layer (server.ts) wires `emit` to actual socket rooms.
  *
  * Specs: realtime-protocol (Move Validation, Disconnection Grace Window,
- * Game Over Delivery), arena-settlement (all settlement requirements).
+ * Game Over Delivery), arena-settlement (all settlement requirements),
+ * shared-match-timer (Clock Expiry — single shared clock, D1/D2/D3).
  */
 import {
   applyMove,
@@ -44,6 +45,10 @@ export type MatchSessionDeps = {
 
 const TICK_MS = 1000;
 
+function reasonFor(end: { reason?: "majority" | "draw" | "timeout" }): GameOverReason {
+  return end.reason === "timeout" ? "timeout" : (end.reason ?? "majority");
+}
+
 export class MatchSession {
   readonly matchId: MatchId;
   readonly mode: GameMode;
@@ -58,6 +63,8 @@ export class MatchSession {
   private clearIntervalFn: typeof clearInterval;
   private graceTimers: Partial<Record<PlayerId, ReturnType<typeof setTimeout>>> = {};
   private clockInterval: ReturnType<typeof setInterval>;
+  /** Total ms allotted for the shared match clock — fixed at match creation, used to recompute `matchClockMs` from `Date.now()` each tick (design D2, avoids `setInterval` drift). */
+  private readonly totalMatchClockMs: number;
   private finished = false;
 
   constructor(deps: MatchSessionDeps) {
@@ -72,6 +79,7 @@ export class MatchSession {
     this.setIntervalFn = deps.setIntervalFn ?? setInterval;
     this.clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
     this.state = createGame();
+    this.totalMatchClockMs = this.state.matchClockMs;
 
     if (this.mode === "ARENA") {
       holdStake(this.store, this.players.P1, this.matchId, this.stake);
@@ -89,21 +97,22 @@ export class MatchSession {
       state: "ACTIVE",
     });
 
-    // Blitz clock: decrement the player-to-move's clock every tick,
-    // broadcast clock_tick, and finalize as a timeout loss when it expires
-    // — realtime-protocol / arena-settlement "Clock Expiry".
+    // Shared match clock: ticks down in real time regardless of whose turn it
+    // is (NOT paused/resumed per turn). Recomputed from Date.now() each tick
+    // rather than decremented, to avoid setInterval drift over a 3+ minute
+    // match (design D2). Expiry no longer means an automatic loss — checkEnd()
+    // resolves the winner by the same majority-of-cells rule as any other
+    // end-of-game condition (design D3, shared-match-timer spec).
     this.clockInterval = this.setIntervalFn(() => {
       if (this.finished) return;
-      const toMove = this.state.turn;
-      this.state = {
-        ...this.state,
-        clocks: { ...this.state.clocks, [toMove]: Math.max(0, this.state.clocks[toMove] - TICK_MS) },
-      };
-      this.emit("*", "clock_tick", { clocks: this.state.clocks });
+      const elapsed = Date.now() - this.state.matchStartedAt;
+      const matchClockMs = Math.max(0, this.totalMatchClockMs - elapsed);
+      this.state = { ...this.state, matchClockMs };
+      this.emit("*", "clock_tick", { matchClockMs });
 
       const end = checkEnd(this.state);
       if (end.over) {
-        this.finalize("timeout", end.winner ?? null);
+        this.finalize(reasonFor(end), end.winner ?? null);
       }
     }, TICK_MS);
   }
@@ -135,13 +144,13 @@ export class MatchSession {
       at,
       captures: result.captures,
       nextState: serializeGameState(this.state),
-      clocks: this.state.clocks,
+      matchClockMs: this.state.matchClockMs,
     };
     this.emit("*", "move_result", payload);
 
     const end = checkEnd(this.state);
     if (end.over) {
-      this.finalize(end.reason === "timeout" ? "timeout" : (end.reason ?? "majority"), end.winner ?? null);
+      this.finalize(reasonFor(end), end.winner ?? null);
     }
   }
 

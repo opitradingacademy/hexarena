@@ -85,24 +85,39 @@ describe("MatchSession — match history persistence (2.14)", () => {
   });
 });
 
-describe("MatchSession — Clock Expiry", () => {
+describe("MatchSession — Shared Match Clock (shared-match-timer)", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("ticks down the clock of the player to move and emits clock_tick", () => {
+  it("ticks down the single shared clock regardless of whose turn it is, and emits clock_tick", () => {
     const { session, events } = makeSession("CASUAL");
+    const initial = session.state.matchClockMs;
     vi.advanceTimersByTime(1000);
     const tick = events.find((e) => e.event === "clock_tick") as
-      | { payload: { clocks: Record<string, number> } }
+      | { payload: { matchClockMs: number } }
       | undefined;
     expect(tick).toBeDefined();
-    expect(tick!.payload.clocks.P1).toBeLessThan(session.state.clocks.P1 + 1);
+    expect(tick!.payload.matchClockMs).toBeLessThan(initial);
+    expect(session.state.matchClockMs).toBeLessThan(initial);
   });
 
-  it("finalizes as timeout loss when a player's clock reaches zero", () => {
-    const { events } = makeSession("CASUAL");
+  it("recomputes the clock from Date.now() instead of decrementing per tick (no accumulated drift)", () => {
+    const { session } = makeSession("CASUAL");
+    const initial = session.state.matchClockMs;
+    vi.advanceTimersByTime(10_000);
+    expect(session.state.matchClockMs).toBe(initial - 10_000);
+  });
+
+  it("ends the match by piece-count majority when the shared clock expires — NOT an automatic loss for whoever had the turn", () => {
+    const { session, events } = makeSession("CASUAL");
+    // P1 starts with 3 cells vs P2's 3 cells; no moves made, so majority is a
+    // draw — the important assertion is `reason` still fires via the clock
+    // and the winner is computed by the majority rule, not "P2 always wins
+    // because it was P1's turn when the clock hit 0" (the old sudden-death
+    // behavior this test used to assert).
     vi.advanceTimersByTime(3 * 60 * 1000); // default clock is 3 minutes
     const gameOver = events.find((e) => e.event === "game_over")!;
-    expect(gameOver.payload).toEqual({ winner: "P2", reason: "timeout" });
+    expect(gameOver.payload).toMatchObject({ winner: null, reason: "timeout" });
+    void session;
   });
 });
