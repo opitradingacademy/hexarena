@@ -42,8 +42,10 @@ function MatchmakingScreen() {
   );
   const [depositOpen, setDepositOpen] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [inviteCopied, setInviteCopied] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState("");
 
   useEffect(() => {
     const socket = getSocket();
@@ -83,9 +85,14 @@ function MatchmakingScreen() {
         setDepositOpen(true);
         setServerError(payload.msg ?? "Insufficient balance — deposit stake first");
         setStatus("idle");
+        return;
+      }
+      if (payload.code === "NOT_FOUND" || payload.code === "INVALID_STATE") {
+        setServerError("That code isn't valid. Double-check it and try again.");
       }
     }
     function onInviteCreated(payload: { code: string }) {
+      setInviteCode(payload.code);
       setInviteLink(`${window.location.origin}/invite/${payload.code}`);
       setInviteCopied(false);
       setStatus("invite-pending");
@@ -136,6 +143,7 @@ function MatchmakingScreen() {
 
   function handleCancel() {
     setStatus("cancelled");
+    setInviteCode(null);
     setInviteLink(null);
     getSocket().emit("cancel_queue", {});
   }
@@ -159,6 +167,13 @@ function MatchmakingScreen() {
     if (!inviteLink) return;
     await navigator.clipboard.writeText(inviteLink);
     setInviteCopied(true);
+  }
+
+  function handleJoinByCode() {
+    const code = joinCodeInput.trim();
+    if (!code) return;
+    setServerError(null);
+    getSocket().emit("join_invite", { code });
   }
 
   async function handleStakeConfirmed() {
@@ -235,20 +250,35 @@ function MatchmakingScreen() {
           <p className="text-sm font-semibold uppercase tracking-wide text-arena-cyan">
             Waiting for your friend to join…
           </p>
+          <p className="text-center text-xs text-slate-400">
+            Share this code with your friend — they enter it in MiniPay under
+            &ldquo;Join with a code&rdquo;.
+          </p>
           <div
-            data-testid="invite-link"
-            className="w-full break-all rounded-xl border border-arena-border bg-arena-surface p-3 text-center text-xs text-slate-300"
+            data-testid="invite-code"
+            className="w-full rounded-xl border border-arena-gold/60 bg-arena-surface p-4 text-center text-3xl font-black tracking-[0.3em] text-arena-gold"
           >
-            {inviteLink}
+            {inviteCode}
           </div>
-          <button
-            type="button"
-            onClick={handleCopyInviteLink}
-            className="w-full rounded-xl bg-arena-cyan py-3 text-sm font-bold uppercase text-arena-bg transition"
-          >
-            {inviteCopied ? "Copied!" : "Copy link"}
-          </button>
-          <p className="text-center text-xs text-slate-400">This link expires in 5 minutes.</p>
+          <p className="text-center text-xs text-slate-500">This code expires in 5 minutes.</p>
+          <details className="w-full text-center text-xs text-slate-500">
+            <summary className="cursor-pointer uppercase tracking-wide">
+              Playing on web instead?
+            </summary>
+            <div
+              data-testid="invite-link"
+              className="mt-2 break-all rounded-xl border border-arena-border bg-arena-surface p-3 text-slate-400"
+            >
+              {inviteLink}
+            </div>
+            <button
+              type="button"
+              onClick={handleCopyInviteLink}
+              className="mt-2 w-full rounded-xl border border-arena-border py-2 text-xs font-bold uppercase text-slate-300 transition"
+            >
+              {inviteCopied ? "Copied!" : "Copy link"}
+            </button>
+          </details>
           <button
             type="button"
             onClick={handleCancel}
@@ -303,6 +333,25 @@ function MatchmakingScreen() {
           >
             Invite a friend
           </button>
+
+          <div className="mt-6 flex gap-2">
+            <input
+              type="text"
+              inputMode="text"
+              placeholder="Enter a code"
+              value={joinCodeInput}
+              onChange={(e) => setJoinCodeInput(e.target.value)}
+              className="min-w-0 flex-1 rounded-xl border border-arena-border bg-arena-surface px-3 py-3 text-sm uppercase text-slate-200 placeholder:text-slate-500 placeholder:normal-case"
+            />
+            <button
+              type="button"
+              onClick={handleJoinByCode}
+              disabled={!joinCodeInput.trim()}
+              className="rounded-xl border border-arena-cyan/60 px-5 text-sm font-bold uppercase text-arena-cyan transition disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              Join
+            </button>
+          </div>
         </>
       )}
 

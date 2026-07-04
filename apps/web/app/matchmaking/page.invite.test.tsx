@@ -59,7 +59,7 @@ describe("MatchmakingScreen — Invite a friend (CASUAL)", () => {
     expect(emitSpy).toHaveBeenCalledWith("create_invite", { mode: "CASUAL" });
   });
 
-  it("shows the invite link once the server responds with invite_created", () => {
+  it("shows the invite code (and a discreet web link) once invite_created arrives", () => {
     render(<MatchmakingPage />);
     fireEvent.click(screen.getByText("Invite a friend"));
 
@@ -67,6 +67,7 @@ describe("MatchmakingScreen — Invite a friend (CASUAL)", () => {
       fakeSocket.emit("invite_created", { code: "abc12345", expiresAt: Date.now() + 300_000 });
     });
 
+    expect(screen.getByTestId("invite-code").textContent).toBe("abc12345");
     expect(screen.getByTestId("invite-link").textContent).toContain("/invite/abc12345");
   });
 
@@ -82,5 +83,63 @@ describe("MatchmakingScreen — Invite a friend (CASUAL)", () => {
     expect(push).toHaveBeenCalledWith(
       expect.stringContaining("/game/m1?color=P1&opponent=0xFRIEND"),
     );
+  });
+});
+
+describe("MatchmakingScreen — Join with a code", () => {
+  beforeEach(() => {
+    fakeSocket.removeAllListeners();
+    push.mockClear();
+  });
+
+  it("emits join_invite with the typed code", () => {
+    render(<MatchmakingPage />);
+    const emitSpy = vi.spyOn(fakeSocket, "emit");
+
+    fireEvent.change(screen.getByPlaceholderText("Enter a code"), {
+      target: { value: "xyz98765" },
+    });
+    fireEvent.click(screen.getByText("Join"));
+
+    expect(emitSpy).toHaveBeenCalledWith("join_invite", { code: "xyz98765" });
+  });
+
+  it("disables the Join button until a code is typed", () => {
+    render(<MatchmakingPage />);
+    expect(screen.getByText("Join")).toBeDisabled();
+
+    fireEvent.change(screen.getByPlaceholderText("Enter a code"), {
+      target: { value: "xyz98765" },
+    });
+
+    expect(screen.getByText("Join")).not.toBeDisabled();
+  });
+
+  it("navigates to the game screen once join_invite pairs with the host", () => {
+    render(<MatchmakingPage />);
+    fireEvent.change(screen.getByPlaceholderText("Enter a code"), {
+      target: { value: "xyz98765" },
+    });
+    fireEvent.click(screen.getByText("Join"));
+
+    fakeSocket.emit("match_found", { matchId: "m2", color: "P2", opponent: "0xHOST" });
+
+    expect(push).toHaveBeenCalledWith(
+      expect.stringContaining("/game/m2?color=P2&opponent=0xHOST"),
+    );
+  });
+
+  it("shows a friendly message when the code is invalid", () => {
+    render(<MatchmakingPage />);
+    fireEvent.change(screen.getByPlaceholderText("Enter a code"), {
+      target: { value: "nope" },
+    });
+    fireEvent.click(screen.getByText("Join"));
+
+    act(() => {
+      fakeSocket.emit("error", { code: "NOT_FOUND", msg: "gone" });
+    });
+
+    expect(screen.getByRole("alert").textContent).toMatch(/code isn't valid/i);
   });
 });
