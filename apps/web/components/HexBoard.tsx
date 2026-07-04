@@ -51,7 +51,11 @@ export const HEX_BOARD_MOBILE_BOARD_SIZE = computeBoardSize(HEX_SIZE_MOBILE).boa
 function computeBoardSize(hexSize: number) {
   const hexW = SQRT3 * hexSize;
   const center = (BOARD_RADIUS + 1) * hexW;
-  const boardSize = center * 2;
+  // `center * 2` only spans the centers of the leftmost/rightmost cells.
+  // The hexagon at the edge extends `hexSize` further in each direction
+  // (pointy-top has horizontal radius = hexSize). Adding 2*hexSize makes
+  // sure the outermost cells aren't clipped against the SVG viewport.
+  const boardSize = center * 2 + hexSize * 2;
   return { hexW, center, boardSize };
 }
 
@@ -104,12 +108,21 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
     }
   }
 
+  const focusStrokeW = Math.max(2, strokeWidth * 1.8);
+
   return (
     <div
       ref={wrapRef}
       data-testid="hex-board-wrap"
       className="flex w-full justify-center overflow-hidden"
     >
+      <style>{`
+        .hex-cell:focus { outline: none; }
+        .hex-cell:focus-visible polygon {
+          stroke: ${FILL_CYAN};
+          stroke-width: ${focusStrokeW};
+        }
+      `}</style>
       <svg
         data-testid="hex-board"
         role="grid"
@@ -136,6 +149,7 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
               tabIndex={onCellClick ? 0 : -1}
               onClick={() => onCellClick?.({ q: cell.q, r: cell.r })}
               onKeyDown={(e) => handleKeyDown(e, { q: cell.q, r: cell.r })}
+              className="hex-cell"
               style={{ cursor: onCellClick ? "pointer" : "default" }}
             >
               <polygon
