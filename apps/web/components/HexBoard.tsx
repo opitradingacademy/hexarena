@@ -50,13 +50,17 @@ export const HEX_BOARD_MOBILE_BOARD_SIZE = computeBoardSize(HEX_SIZE_MOBILE).boa
 
 function computeBoardSize(hexSize: number) {
   const hexW = SQRT3 * hexSize;
-  const center = (BOARD_RADIUS + 1) * hexW;
-  // `center * 2` only spans the centers of the leftmost/rightmost cells.
-  // The hexagon at the edge extends `hexSize` further in each direction
-  // (pointy-top has horizontal radius = hexSize). Adding 2*hexSize makes
-  // sure the outermost cells aren't clipped against the SVG viewport.
-  const boardSize = center * 2 + hexSize * 2;
-  return { hexW, center, boardSize };
+  // The range of `q + r/2` across all 61 radius-4 cells is exactly
+  // [-BOARD_RADIUS, +BOARD_RADIUS] (verified by enumeration). The range
+  // of `r` is also [-BOARD_RADIUS, +BOARD_RADIUS], so:
+  //   x center = (BOARD_RADIUS + 0.5) * hexW   (half-cell padding each side)
+  //   y center = (BOARD_RADIUS + 1) * hexSize  (vertical radius + padding)
+  // boardSize is square and sized to fit the wider axis (x), which gives
+  // extra vertical padding — that's fine, the hex sits centered in it.
+  const centerX = (BOARD_RADIUS + 0.5) * hexW;
+  const centerY = (BOARD_RADIUS + 1) * hexSize;
+  const boardSize = (2 * BOARD_RADIUS + 1) * hexW;
+  return { hexW, centerX, centerY, boardSize };
 }
 
 /**
@@ -90,7 +94,7 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
     return () => window.removeEventListener("resize", recompute);
   }, []);
 
-  const { center, boardSize } = computeBoardSize(hexSize);
+  const { centerX, centerY, boardSize } = computeBoardSize(hexSize);
   // Inset between cells. Pixels per hex size, ~6% of hexSize feels right.
   const strokeWidth = Math.max(1.5, hexSize * 0.08);
   const pieceRadius = Math.max(7, Math.min(11, hexSize * 0.4));
@@ -98,7 +102,7 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
   function axialToPixel(q: number, r: number) {
     const x = hexSize * SQRT3 * (q + r / 2);
     const y = hexSize * 1.5 * r;
-    return { x: x + center, y: y + center };
+    return { x: x + centerX, y: y + centerY };
   }
 
   function handleKeyDown(e: React.KeyboardEvent<SVGGElement>, at: Axial) {
