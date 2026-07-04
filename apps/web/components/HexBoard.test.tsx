@@ -1,8 +1,23 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGame } from "@hexarena/shared/domain/board";
 import { HexBoard } from "./HexBoard";
+
+class ResizeObserverMock {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+
+beforeEach(() => {
+  (globalThis as unknown as { ResizeObserver: typeof ResizeObserverMock }).ResizeObserver =
+    ResizeObserverMock;
+});
+
+afterEach(() => {
+  delete (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver;
+});
 
 describe("HexBoard", () => {
   it("renders all 61 radius-4 cells as grid cells", () => {
@@ -23,12 +38,12 @@ describe("HexBoard", () => {
     expect(onCellClick).toHaveBeenCalledWith({ q: 0, r: 0 });
   });
 
-  it("uses the gold hex fill and dark piece ring for high contrast against bg-arena-bg", () => {
+  it("uses the gold hex fill and dark piece outline for high contrast against bg-arena-bg", () => {
     render(<HexBoard state={createGame()} />);
     const emptyCell = screen.getByTestId("cell-0,0");
     expect(emptyCell.className).toContain("bg-arena-gold");
     const p1Cell = screen.getByTestId("cell--2,0");
     const p1Piece = p1Cell.querySelector("span");
-    expect(p1Piece?.className).toContain("ring-arena-bg");
+    expect(p1Piece?.className).toContain("outline-arena-bg");
   });
 });

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { Axial, GameState } from "@hexarena/shared/domain/board";
 import { toDisplayCells } from "../lib/boardCells";
 
@@ -8,17 +9,19 @@ export type HexBoardProps = {
   capturedKeys?: string[];
 };
 
-const HEX_SIZE = 20; // px, center-to-corner radius
-const HEX_W = Math.sqrt(3) * HEX_SIZE; // pointy-top hex width
-const HEX_H = 2 * HEX_SIZE;
+const HEX_SIZE_MOBILE = 20; // px, center-to-corner radius (mobile default)
+const HEX_SIZE_DESKTOP_MIN = 22; // floor for desktop — keep parity with mobile
+const HEX_SIZE_DESKTOP_MAX = 32; // ceiling — board never exceeds ~553px wide
 const BOARD_RADIUS = 4;
-const CENTER = (BOARD_RADIUS + 1) * HEX_W;
-const BOARD_SIZE = CENTER * 2;
+const SQRT3 = Math.sqrt(3);
+const ASPECT = (BOARD_RADIUS + 1) * SQRT3 * 2; // board width per unit hexSize
 
-function axialToPixel(q: number, r: number) {
-  const x = HEX_SIZE * Math.sqrt(3) * (q + r / 2);
-  const y = HEX_SIZE * 1.5 * r;
-  return { x: x + CENTER, y: y + CENTER };
+function computeBoardSize(hexSize: number) {
+  const hexW = SQRT3 * hexSize;
+  const hexH = 2 * hexSize;
+  const center = (BOARD_RADIUS + 1) * hexW;
+  const boardSize = center * 2;
+  return { hexW, hexH, center, boardSize };
 }
 
 export const PIECE_COLOR: Record<"P1" | "P2", string> = {
@@ -31,55 +34,99 @@ export const PIECE_COLOR_NAME: Record<"P1" | "P2", string> = {
   P2: "Magenta",
 };
 
+export const HEX_BOARD_MOBILE_BOARD_SIZE = computeBoardSize(HEX_SIZE_MOBILE).boardSize;
+
 /**
  * Hex board renderer for the in-game screen (design.md "3. In-Game Board").
  * Renders all 61 radius-4 axial cells in a real pointy-top hexagonal layout
  * (axial -> pixel projection), each cell clipped into a hexagon shape.
+ *
+ * Responsive sizing:
+ *   - mobile (<640px): fixed HEX_SIZE_MOBILE (~346px board). The mobile
+ *     container max-w-md (448px) gives enough room and keeps hexes crisp.
+ *   - desktop (≥640px): hexSize scales to fit the available container
+ *     width, capped between HEX_SIZE_DESKTOP_MIN and HEX_SIZE_DESKTOP_MAX.
+ *     This stops the board from looking lost on wide viewports.
  */
 export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: HexBoardProps) {
   const cells = toDisplayCells(state);
   const capturedSet = new Set(capturedKeys);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [hexSize, setHexSize] = useState(HEX_SIZE_MOBILE);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    function recompute() {
+      const el = wrapRef.current;
+      if (!el) return;
+      const width = el.clientWidth;
+      if (width < 640) {
+        setHexSize(HEX_SIZE_MOBILE);
+        return;
+      }
+      const desired = width / ASPECT;
+      const clamped = Math.max(HEX_SIZE_DESKTOP_MIN, Math.min(HEX_SIZE_DESKTOP_MAX, desired));
+      setHexSize(clamped);
+    }
+    recompute();
+    const ro = new ResizeObserver(recompute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const { hexW, hexH, center, boardSize } = computeBoardSize(hexSize);
+  const piecePx = Math.max(14, Math.min(20, hexSize * 0.7));
+
+  function axialToPixel(q: number, r: number) {
+    const x = hexSize * SQRT3 * (q + r / 2);
+    const y = hexSize * 1.5 * r;
+    return { x: x + center, y: y + center };
+  }
 
   return (
-    <div
-      data-testid="hex-board"
-      role="grid"
-      className="relative mx-auto"
-      style={{ width: BOARD_SIZE, height: BOARD_SIZE }}
-    >
-      {cells.map((cell) => {
-        const { x, y } = axialToPixel(cell.q, cell.r);
-        const isLastMove = lastMove && lastMove.q === cell.q && lastMove.r === cell.r;
-        const isCaptured = capturedSet.has(cell.key);
+    <div ref={wrapRef} data-testid="hex-board-wrap" className="w-full">
+      <div
+        data-testid="hex-board"
+        role="grid"
+        className="relative mx-auto"
+        style={{ width: boardSize, height: boardSize }}
+      >
+        {cells.map((cell) => {
+          const { x, y } = axialToPixel(cell.q, cell.r);
+          const isLastMove = lastMove && lastMove.q === cell.q && lastMove.r === cell.r;
+          const isCaptured = capturedSet.has(cell.key);
 
-        return (
-          <button
-            key={cell.key}
-            type="button"
-            role="gridcell"
-            data-testid={`cell-${cell.key}`}
-            data-occupant={cell.occupant ?? "empty"}
-            onClick={() => onCellClick?.({ q: cell.q, r: cell.r })}
-            className={`absolute flex items-center justify-center border border-arena-gold/30 bg-arena-gold transition ${
-              isLastMove ? "ring-2 ring-arena-bg" : ""
-            } ${isCaptured ? "animate-pulse bg-arena-magenta/40" : ""}`}
-            style={{
-              width: HEX_W,
-              height: HEX_H,
-              left: x - HEX_W / 2,
-              top: y - HEX_H / 2,
-              clipPath: "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
-            }}
-          >
-            {cell.occupant && (
-              <span
-                className={`h-3.5 w-3.5 rounded-full ring-2 ring-arena-bg ${PIECE_COLOR[cell.occupant]}`}
-                aria-hidden
-              />
-            )}
-          </button>
-        );
-      })}
+          return (
+            <button
+              key={cell.key}
+              type="button"
+              role="gridcell"
+              data-testid={`cell-${cell.key}`}
+              data-occupant={cell.occupant ?? "empty"}
+              onClick={() => onCellClick?.({ q: cell.q, r: cell.r })}
+              className={`absolute flex items-center justify-center border border-arena-gold/30 bg-arena-gold transition ${
+                isLastMove ? "ring-2 ring-arena-bg" : ""
+              } ${isCaptured ? "animate-pulse bg-arena-magenta/40" : ""}`}
+              style={{
+                width: hexW,
+                height: hexH,
+                left: x - hexW / 2,
+                top: y - hexH / 2,
+                clipPath: "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
+              }}
+            >
+              {cell.occupant && (
+                <span
+                  className={`block rounded-full outline outline-2 outline-arena-bg outline-offset-[-2px] ${PIECE_COLOR[cell.occupant]}`}
+                  aria-hidden
+                  style={{ width: piecePx, height: piecePx }}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
