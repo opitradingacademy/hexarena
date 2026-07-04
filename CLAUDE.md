@@ -4,11 +4,21 @@ Othello sobre tablero hexagonal para MiniPay (Celo). Ver `proyecto.md` para el G
 
 ## Estado del proyecto
 
-Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos en `openspec/` + Engram). Cambio activo: **`hexarena-mvp`**.
+Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos en `openspec/` + Engram). Cambios: **`hexarena-mvp`** (base del MVP) y **`shared-match-timer`** (reglas de tiempo, ver abajo).
 
-- Artefactos SDD: `openspec/changes/hexarena-mvp/` (proposal, design, specs/, tasks.md, state.yaml).
-- Estado del DAG: `openspec/changes/hexarena-mvp/state.yaml` — siempre revisar ahí antes de asumir qué fase sigue.
-- Progreso de implementación detallado: Engram, topic_key `sdd/hexarena-mvp/apply-progress`.
+- Artefactos SDD: `openspec/changes/hexarena-mvp/` y `openspec/changes/shared-match-timer/` (proposal, design, specs/, tasks.md, state.yaml cada uno).
+- Estado del DAG: revisar `state.yaml` del cambio correspondiente antes de asumir qué fase sigue.
+- Progreso de implementación detallado: Engram, topic_key `sdd/hexarena-mvp/apply-progress` y `sdd/shared-match-timer/apply-progress`.
+
+### Reglas de tiempo: reloj compartido de partida (2026-07-04, `shared-match-timer`)
+
+Reemplazado el reloj sudden-death por jugador por un **reloj único de partida** (piso 3 minutos) que corre en tiempo real sin pausar por turno. Al llegar a 0, el match termina y se puntúa **igual que un final normal de tablero** (gana quien tenga más piezas; empate en piezas = draw) — ya no pierde automáticamente quien se quedó sin tiempo. El tablero ahora muestra el conteo de piezas capturadas en vivo por jugador.
+
+- **Por qué**: el reloj por jugador premiaba jugar rápido por sobre jugar bien — un jugador débil podía forzar la victoria agotando el reloj de uno más fuerte, algo que no tiene sentido en un juego de captura de piezas con dinero real en juego (modo Arena).
+- **Qué cambió**: `packages/shared/domain/board.ts` (`GameState.clocks: Record<PlayerId, number>` → `matchClockMs` + `matchStartedAt`; `checkEnd()` ya no declara derrota automática por reloj, dispara la misma evaluación de mayoría que board-full/both-stuck), `packages/shared/protocol/index.ts` (payloads con `matchClockMs` en vez de `clocks`), `apps/server/matchSession.ts` (el reloj se recalcula contra `Date.now()` en cada tick, no se decrementa 1000ms — elimina drift acumulado de `setInterval` en partidas de 3+ min), `apps/web` (`MatchClock.tsx` + `PlayerStatusRow.tsx` + `lib/captureCount.ts` reemplazan `PlayerClock.tsx`).
+- **Detalle retenido a propósito**: el string `reason: "timeout"` en `game_over` se mantiene por compatibilidad, pero ahora significa "se acabó el reloj compartido y se resolvió por mayoría de piezas", no "alguien perdió por reloj". El settlement de Arena para empates depende de `winner === null`, no del string `reason`, así que no hubo riesgo de regresión ahí (confirmado en `sdd-verify`).
+- **Deploy**: 3 commits encadenados en `main` (`b27ad26` shared, `e274686` server, `6b54b27` web), 196/196 tests verde, `sdd-verify` PASS (0 críticos), deployado a Vercel + Railway (auto-deploy por push), **probado en vivo por el usuario y confirmado funcionando bien**.
+- **Pendiente no bloqueante**: `docs/timers.md` fue reescrito por el sub-agente para documentar el comportamiento nuevo, pero **el usuario pidió explícitamente no trackearlo en git** — queda como archivo local sin commitear, no es la fuente de verdad versionada. `sdd-archive` de este cambio todavía no se corrió.
 
 **Al día de hoy (2026-07-03, cierre de sesión de debugging extendida + feature de carga de saldo desde el Home):**
 

@@ -52,5 +52,28 @@ The client MUST restrict user-facing balances and transactions to USDT, USDC, an
 - THEN only USDT, USDC, and USDm MUST be offered
 - AND CELO MUST NOT appear as a selectable or displayed asset
 
+### Requirement: In-Game Clock Display
+The client MUST render the single shared match clock, not one clock per player (see game-engine spec "Clock Expiry" — shared-match-timer change, merged 2026-07-03).
+
+#### Scenario: Single shared clock rendered
+- GIVEN a match is active
+- WHEN the client receives `clock_tick{matchClockMs}` or any payload carrying `matchClockMs`
+- THEN the client MUST render exactly one countdown showing `matchClockMs`
+- AND MUST NOT render two separate per-player countdowns
+
+### Requirement: Live Captured-Piece Count
+The client MUST display a live count of pieces currently controlled by each player on the board, updated after every move (shared-match-timer change, merged 2026-07-03).
+
+#### Scenario: Capture count updates after a move
+- GIVEN a move is applied that captures 4 opponent cells
+- WHEN the client receives the resulting `nextState`
+- THEN the client MUST recompute and display each player's cell count derived from the board state
+- AND the displayed counts MUST reflect the new totals without requiring a page reload
+
+#### Scenario: Capture counts visible at match start
+- GIVEN a match has just started (initial layout: 3 cells per player)
+- WHEN the game screen renders
+- THEN the client MUST display 3-3 as the initial captured-piece count for both players
+
 ## Open Questions (product decisions — not resolved by this spec)
 - Whether talent.app registration flow requires any additional in-app copy or disclosure.

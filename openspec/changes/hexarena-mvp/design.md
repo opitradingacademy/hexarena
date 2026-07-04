@@ -66,7 +66,8 @@ type Axial = { q: number; r: number };
 type GameState = {
   board: Map<string, PlayerId | null>;
   turn: PlayerId;
-  clocks: Record<PlayerId, number>;
+  matchClockMs: number;
+  matchStartedAt: number;
   status;
 };
 function createGame(seed?): GameState;
@@ -84,7 +85,7 @@ Clock/session/ledger/chain are application-layer ports (interfaces) injected int
 ## WebSocket Wire Protocol (`packages/shared/protocol`)
 
 C→S: `join_queue{mode, stake?}`, `cancel_queue{}`, `make_move{matchId, at:Axial}`, `resign{matchId}`, `resume{matchId}` (reconnect).
-S→C: `queue_joined{}`, `match_found{matchId, opponent, color, initialState, clocks}`, `move_result{matchId, by, at, captures, nextState, clocks}`, `move_rejected{reason}`, `clock_tick{clocks}`, `opponent_disconnected{graceMs}`, `opponent_reconnected{}`, `game_over{winner, reason, arena?:{prizeUSD, settleTxPending}}`, `error{code,msg}`.
+S→C: `queue_joined{}`, `match_found{matchId, opponent, color, initialState, matchClockMs}`, `move_result{matchId, by, at, captures, nextState, matchClockMs}`, `move_rejected{reason}`, `clock_tick{matchClockMs}`, `opponent_disconnected{graceMs}`, `opponent_reconnected{}`, `game_over{winner, reason, arena?:{prizeUSD, settleTxPending}}`, `error{code,msg}`.
 Server is authority: client sends intent, server validates via domain and broadcasts resulting state.
 
 ## Folder Structure

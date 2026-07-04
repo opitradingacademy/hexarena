@@ -20,21 +20,22 @@ The system MUST place a client into a matchmaking queue for the requested mode a
 - AND MUST NOT enqueue the client
 
 ### Requirement: Match Found
-When two queued clients are paired, the system MUST notify both with symmetric match data.
+When two queued clients are paired, the system MUST notify both with symmetric match data, including the single shared match clock (not per-player clocks — merged from shared-match-timer, 2026-07-03).
 
 #### Scenario: Pairing emits match_found to both
 - GIVEN two clients are compatible in the same queue (mode/stake)
 - WHEN the matchmaker pairs them
-- THEN both clients MUST receive `match_found{matchId, opponent, color, initialState, clocks}`
+- THEN both clients MUST receive `match_found{matchId, opponent, color, initialState, matchClockMs}`
 - AND each client's `color` MUST differ
+- AND `matchClockMs` MUST be identical for both clients (there is only one clock)
 
 ### Requirement: Move Validation
-The system MUST validate every `make_move` against the domain engine before broadcasting a result.
+The system MUST validate every `make_move` against the domain engine before broadcasting a result. The broadcast payload reports the single shared match clock, not per-player clocks.
 
 #### Scenario: Valid move broadcast
 - GIVEN it is the sender's turn and the target cell yields a legal move
 - WHEN `make_move{matchId, at}` is received
-- THEN the server MUST broadcast `move_result{matchId, by, at, captures, nextState, clocks}` to the match room
+- THEN the server MUST broadcast `move_result{matchId, by, at, captures, nextState, matchClockMs}` to the match room
 
 #### Scenario: Invalid move rejected
 - GIVEN the move is illegal (wrong turn, occupied cell, no valid enclosure)
@@ -50,7 +51,7 @@ When a player disconnects mid-match, the system MUST hold the match open for a g
 - WHEN player A reconnects and sends `resume{matchId}` before `graceMs` elapses
 - THEN the server MUST restore player A's session to the match
 - AND MUST broadcast `opponent_reconnected{}` to the opponent
-- AND the match clock MUST continue from where it was
+- AND the shared match clock MUST continue running from where it was (it is NOT paused during the disconnect grace window)
 
 #### Scenario: Abandonment outside grace window
 - GIVEN player A remains disconnected past `graceMs`
@@ -59,10 +60,10 @@ When a player disconnects mid-match, the system MUST hold the match open for a g
 - AND MUST emit `game_over{winner: opponent, reason: "abandon"}`
 
 ### Requirement: Game Over Delivery
-The system MUST notify both clients of game end with a reason and, for Arena matches, settlement status.
+The system MUST notify both clients of game end with a reason and, for Arena matches, settlement status. This applies uniformly whether the match ended by board-full, both-stuck, or shared-clock expiry — the payload shape does not change based on end cause.
 
 #### Scenario: Casual game over
-- GIVEN a Casual match ends by any end condition
+- GIVEN a Casual match ends by any end condition (including shared clock expiry)
 - WHEN the server finalizes the match
 - THEN both clients MUST receive `game_over{winner, reason}` with no `arena` field
 
@@ -71,3 +72,11 @@ The system MUST notify both clients of game end with a reason and, for Arena mat
 - WHEN the server finalizes the match
 - THEN both clients MUST receive `game_over{winner, reason, arena: {prizeUSD, settleTxPending: true}}`
 - AND the client MUST NOT block gameplay UI on settlement confirmation
+
+### Requirement: Shared Clock Tick Broadcast
+The system MUST broadcast the single shared match clock value to both clients approximately once per second while the match is active (merged from shared-match-timer, 2026-07-03).
+
+#### Scenario: Periodic clock tick
+- GIVEN a match is active
+- WHEN 1000ms of real time elapses
+- THEN the server MUST emit `clock_tick{matchClockMs}` to both clients in the match room

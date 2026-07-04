@@ -24,18 +24,17 @@ phases:
       - "PR3: apps/web (Phase 3+4, 6/6 + 1/1 tasks). Eliminado PlayerClock.tsx/.test.tsx (dos relojes por jugador). Nuevo components/MatchClock.tsx (reloj unico compartido). Nuevo lib/captureCount.ts (countPieces, funcion pura) + components/PlayerStatusRow.tsx (turno + conteo de capturas, reemplaza el rol de PlayerClock sin el reloj). game/[matchId]/page.tsx actualizado: MatchClock arriba + 2 PlayerStatusRow, agregado handler clock_tick para actualizar matchClockMs en vivo. docs/timers.md reescrito con seccion 'Version anterior (reemplazada)'. apps/web: 27 test files, 111/111 verde."
     full_suite: "npx vitest run (monorepo completo) -> 44 test files, 196/196 tests verde. lint:copy (apps/web/bin/check-copy-rules.ts) -> 15 files scanned, 0 violaciones."
     pending_manual_smoke:
-      - "5.2: smoke manual de partida completa terminada por clock-expiry con piezas desparejas — requiere entorno corriendo (dev server + 2 clientes), no ejecutado en esta sesión de apply automatizada."
-      - "5.3: smoke manual de partida terminada por board-full antes de que el reloj llegue a 0 — mismo motivo."
+      - "5.2/5.3: smoke manual pendientes al momento de verify (clock-expiry con piezas desparejas, board-full antes del reloj) — RESUELTO: el usuario probo el flujo real en produccion (Vercel+Railway) y confirmo que el reloj compartido y el conteo de capturas funcionan bien."
   verify:
     status: done
     backend: openspec (engram no disponible en esta sesión)
     result: PASS
     critical: 0
     warnings:
-      - "5.2/5.3 smoke manual con partida real (clock-expiry / board-full) siguen pendientes — no bloqueante para merge de codigo, si para dar el cambio por cerrado en produccion."
-      - "docs/timers.md nunca estuvo trackeado en git (git log vacio para ese path) — no introducido por este cambio, pero hay que git add explicito al commitear."
+      - "5.2/5.3 smoke manual con partida real (clock-expiry / board-full) estaban pendientes al momento de verify — resuelto post-verify: el usuario confirmo el flujo real en produccion antes del archive."
+      - "docs/timers.md nunca estuvo trackeado en git (git log vacio para ese path) — no introducido por este cambio. El usuario pidio explicitamente NO trackearlo en git; se dejo fuera de los commits de archive a proposito."
     suggestions:
-      - "design.md documenta checkEnd(state, now = Date.now()) opcional; la implementacion final es checkEnd(state) puro (Date.now() vive solo en matchSession.ts). Simplificacion valida, vale actualizar design.md para reflejar el contrato real."
+      - "design.md documentaba checkEnd(state, now = Date.now()) opcional; la implementacion final es checkEnd(state) puro (Date.now() vive solo en matchSession.ts). Simplificacion valida, vale actualizar design.md para reflejar el contrato real (nota dejada en este mismo archivo de design.md archivado; el delta ya fue mergeado a openspec/changes/hexarena-mvp/design.md junto con la simplificacion)."
       - "Confirmado explicitamente que arena-settlement 'Draw Refund Minus House Rake' depende de winner===null, no del string reason — sin accion requerida, documentado por ser el punto de mayor riesgo de regresion silenciosa en Arena."
     checks_run:
       - "npx vitest run -> 44 test files, 196/196 verde"
@@ -45,8 +44,14 @@ phases:
       - "apps/web/bin/check-copy-rules.ts -> 15 files scanned, 0 violaciones"
       - "grep de 'state.clocks'/'Record<PlayerId, number>' en todo el repo -> 0 resultados (sin leftovers)"
   archive:
-    status: pending
+    status: done
+    backend: openspec (engram no disponible en esta sesión)
+    archived_at: 2026-07-03
+    production_confirmation: "Usuario probo el flujo real en produccion (Vercel + Railway) y confirmo que el reloj compartido y el conteo de capturas funcionan bien. Codigo commiteado en main (commits b27ad26, e274686, 6b54b27), pusheado y deployado ANTES de este archive por el usuario/equipo (fuera de esta sesion de agente)."
+    merged_into: "openspec/changes/hexarena-mvp/specs/{game-engine,realtime-protocol,minipay-client}/spec.md + design.md (domain-port snippet y wire-protocol list actualizados a matchClockMs/matchStartedAt). Ver openspec/changes/hexarena-mvp/state.yaml campo specs.merged_deltas."
+    moved_from: "openspec/changes/shared-match-timer/ -> openspec/archive/shared-match-timer/ (esta carpeta)"
+    excluded_from_archive_commit: "docs/timers.md fue reescrito como parte de PR3 pero, por pedido explicito del usuario, NO se trackea en git — no se incluye en ningun commit de este archive."
 execution_mode: interactive
-artifact_store: hybrid (nota: esta sesión no tuvo acceso a herramientas MCP de Engram; solo se persistió en openspec/. team-lead está backfilleando a Engram)
+artifact_store: hybrid (nota: esta sesión no tuvo acceso a herramientas MCP de Engram; solo se persistió en openspec/. team-lead backfilleo a Engram durante la sesion)
 delivery_strategy: ask-on-risk
 last_updated: 2026-07-03
