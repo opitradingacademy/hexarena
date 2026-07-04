@@ -81,13 +81,7 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
     return () => window.removeEventListener("resize", recompute);
   }, []);
 
-  const { hexH, center, boardSize } = computeBoardSize(hexSize);
-  // Each cell button is SQUARE (`hexH × hexH`), not `hexW × hexH`. The
-  // clip-path polygon uses percentages and only renders a regular hexagon
-  // when the host element is square. A pointy-top hex has hexW < hexH,
-  // so making the button hexW × hexH squashes the hexagon horizontally
-  // and only the top/bottom triangles remain visible.
-  const cellSide = hexH;
+  const { hexW, hexH, center, boardSize } = computeBoardSize(hexSize);
   const piecePx = Math.max(14, Math.min(20, hexSize * 0.7));
 
   function axialToPixel(q: number, r: number) {
@@ -121,14 +115,18 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
               data-testid={`cell-${cell.key}`}
               data-occupant={cell.occupant ?? "empty"}
               onClick={() => onCellClick?.({ q: cell.q, r: cell.r })}
-              className={`absolute flex items-center justify-center border border-arena-gold/30 bg-arena-gold transition ${
+              className={`absolute flex items-center justify-center bg-arena-gold transition active:translate-y-px ${
                 isLastMove ? "ring-2 ring-arena-bg" : ""
               } ${isCaptured ? "animate-pulse bg-arena-magenta/40" : ""}`}
               style={{
-                width: cellSide,
-                height: cellSide,
-                left: x - cellSide / 2,
-                top: y - cellSide / 2,
+                width: hexW,
+                height: hexH,
+                left: x - hexW / 2,
+                top: y - hexH / 2,
+                // 2px inset dark border drawn behind the clip-path via
+                // box-shadow — keeps the hex outline visible without
+                // getting clipped by the polygon itself.
+                boxShadow: "inset 0 0 0 2px rgba(11, 13, 23, 0.95)",
                 clipPath: "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
               }}
             >
