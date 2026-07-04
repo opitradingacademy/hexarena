@@ -20,6 +20,11 @@ Reemplazado el reloj sudden-death por jugador por un **reloj único de partida**
 - **Deploy**: 3 commits encadenados en `main` (`b27ad26` shared, `e274686` server, `6b54b27` web), 196/196 tests verde, `sdd-verify` PASS (0 críticos), deployado a Vercel + Railway (auto-deploy por push), **probado en vivo por el usuario y confirmado funcionando bien**.
 - **Pendiente no bloqueante**: `docs/timers.md` fue reescrito por el sub-agente para documentar el comportamiento nuevo, pero **el usuario pidió explícitamente no trackearlo en git** — queda como archivo local sin commitear, no es la fuente de verdad versionada. `sdd-archive` de este cambio todavía no se corrió.
 
+### Estado actual al cierre (2026-07-04)
+
+- **SQLite persistente en Railway ✅ RESUELTO.** Volume montado en `/data` con `SQLITE_PATH=/data/hexarena.db`. Smoke test verificado: depósito $0.10 USDT → `GET /api/balance` → redeploy forzado → balance persiste intacto. El bloqueador #1 del MVP quedó eliminado. El server ya no cae al `/tmp/hexarena.db` efímero. Log de validación al boot: `using sqlite ledger at /data/hexarena.db` — si ves `cannot write to /data, falling back to memory ledger...` el volume no está montado. **Caveat**: Railway Free tier NO soporta volumes — mínimo Hobby ($5/mes, 1 GB storage incluido, alcanza para los próximos 12 meses sin upgrade).
+- **Treasury control externo ✅ RESUELTO sin tocar código.** El usuario importó la `OPERATOR_PRIVATE_KEY` actual a una wallet externa (MetaMask). Los fondos del Arena siguen yendo a `0x34d5d015B4805E985619D0F4aaCb6343a6457fF2`, pero ahora el user puede ver el balance, mover USDT y recibir notificaciones (CeloScan alerts) sin correr scripts. `scripts/recover-treasury-funds.ts` sigue siendo útil solo para edge cases (drift entre ledger y chain, fondos huérfanos), no para operaciones rutinarias.
+
 **Al día de hoy (2026-07-03, cierre de sesión de debugging extendida + feature de carga de saldo desde el Home):**
 
 - PR1–PR5 completados, deployados en producción.
@@ -35,6 +40,7 @@ Reemplazado el reloj sudden-death por jugador por un **reloj único de partida**
 **Causa raíz del modal-loop de firmas redundantes e insuficiencia de saldo artificial (Identificado y solucionado):**
 
 A pesar de tener saldo, el flujo de depósito volvía a pedir firma debido a dos factores:
+
 1. **Discrepancia de case-sensitivity del `userId`:** En `apps/server/server.ts`, el `userIdFor(socket)` resolvía la wallet del handshake sin normalizar (posiblemente lowercase). Sin embargo, los endpoints `/api/deposit` y `/api/balance` normalizaban usando `getAddress` (casing con checksum EIP-55). En la base de datos SQLite (case-sensitive), el saldo del usuario se acreditaba bajo la wallet checksummed (`0x34D...`), pero el socket ejecutaba `join_queue` bajo el `userId` en minúsculas (`0x34d...`), devolviendo balance 0 y disparando `INSUFFICIENT_BALANCE` de forma infinita.
 2. **Reseteo del diálogo a `idle`:** El diálogo `StakeConfirmDialog` reseteaba su estado a `idle` al reabrirse, perdiendo cualquier tracking de transacción firmada previa en curso y obligando a firmar de nuevo.
 
@@ -69,11 +75,10 @@ El token `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e` NO es el USDT real de Teth
 
 ### Pendientes para la próxima sesión
 
-1. **Persistir SQLite en Railway volume**: setear `SQLITE_PATH=/data/hexarena.db` con un volume en `/data`. Sin esto, cada redeploy borra el balance acreditado. Es el bloqueador #1 del MVP.
-2. **2-device match pairing test**: smoke real con dos devices físicos MiniPay. Necesita otro operador (la última prueba con tu solo device no garantiza el match real).
-3. **Quitar logs `[HexArena:diag]` temporales** en server y cliente (dejados en commit `882e791` y `bc41166` para diagnosticar — ahora es momento de removerlos cuando confirmes el fix).
-4. **talent.app registration** (Prueba de Ship).
-5. **Submisión a MiniPay catalogue Stage 1** (intake form).
+1. **2-device match pairing test**: smoke real con dos devices físicos MiniPay. Necesita otro operador (la última prueba con tu solo device no garantiza el match real).
+2. **Quitar logs `[HexArena:diag]` temporales** en server y cliente (dejados en commit `882e791` y `bc41166` para diagnosticar — ahora es momento de removerlos cuando confirmes el fix).
+3. **talent.app registration** (Prueba de Ship).
+4. **Submisión a MiniPay catalogue Stage 1** (intake form).
 
 ### Recursos
 
@@ -96,6 +101,7 @@ Estos se aplicaron 3+ veces en distintos lugares — son la fuente de verdad par
 7. **CORS**: el HTTP handler necesita su propio Access-Control-Allow-Origin + OPTIONS preflight. Socket.IO's CORS no se extiende a HTTP.
 8. **Matchmaker**: NUNCA hacer match de un userId consigo mismo. Filtrar self-entries siempre.
 9. **Proveedor multi-RPC**: viem `fallback([...])` solo cae a la siguiente RPC si hay error de transporte, NO si devuelve `null`. Para poll de receipts nuevos, hacer `Promise.allSettled` sobre clients separados y tomar el primer non-null.
+10. **Railway + SQLite persistente**: para que el ledger sobreviva redeploys, setear `SQLITE_PATH=/data/<file>.db` con un volume de Railway montado en `/data`. El default `/tmp/<file>.db` es writable pero **efímero** (se borra cada redeploy). Log de validación al boot: `using sqlite ledger at <path>`. **Free tier NO soporta volumes** — mínimo Hobby. Storage incluido en Hobby (1 GB) alcanza para ~400k matches acumulados con el schema actual (~2.5 KB/partida en disco).
 
 ## Reglas de MiniPay para Mini Apps (HARD RULES — lint gate + hand-reviewed)
 
