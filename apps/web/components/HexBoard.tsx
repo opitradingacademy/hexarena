@@ -81,7 +81,13 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
     return () => window.removeEventListener("resize", recompute);
   }, []);
 
-  const { hexW, hexH, center, boardSize } = computeBoardSize(hexSize);
+  const { hexH, center, boardSize } = computeBoardSize(hexSize);
+  // Each cell button is SQUARE (`hexH × hexH`), not `hexW × hexH`. The
+  // clip-path polygon uses percentages and only renders a regular hexagon
+  // when the host element is square. A pointy-top hex has hexW < hexH,
+  // so making the button hexW × hexH squashes the hexagon horizontally
+  // and only the top/bottom triangles remain visible.
+  const cellSide = hexH;
   const piecePx = Math.max(14, Math.min(20, hexSize * 0.7));
 
   function axialToPixel(q: number, r: number) {
@@ -91,11 +97,15 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
   }
 
   return (
-    <div ref={wrapRef} data-testid="hex-board-wrap" className="w-full">
+    <div
+      ref={wrapRef}
+      data-testid="hex-board-wrap"
+      className="flex w-full justify-center overflow-hidden"
+    >
       <div
         data-testid="hex-board"
         role="grid"
-        className="relative mx-auto"
+        className="relative shrink-0"
         style={{ width: boardSize, height: boardSize }}
       >
         {cells.map((cell) => {
@@ -115,10 +125,10 @@ export function HexBoard({ state, onCellClick, lastMove, capturedKeys = [] }: He
                 isLastMove ? "ring-2 ring-arena-bg" : ""
               } ${isCaptured ? "animate-pulse bg-arena-magenta/40" : ""}`}
               style={{
-                width: hexW,
-                height: hexH,
-                left: x - hexW / 2,
-                top: y - hexH / 2,
+                width: cellSide,
+                height: cellSide,
+                left: x - cellSide / 2,
+                top: y - cellSide / 2,
                 clipPath: "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
               }}
             >
