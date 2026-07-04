@@ -10,6 +10,10 @@ Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos
 - Estado del DAG: revisar `state.yaml` del cambio correspondiente antes de asumir qué fase sigue.
 - Progreso de implementación detallado: Engram, topic_key `sdd/hexarena-mvp/apply-progress` y `sdd/shared-match-timer/apply-progress`.
 
+### Link de invitación 1-a-1 (Casual + Arena) (2026-07-04)
+
+Nuevo par de eventos de socket `create_invite`/`join_invite` en `apps/server/server.ts` que permiten a un jugador generar un link compartible (`/invite/<code>`) que empareja directamente a quien lo genera con quien lo abre, saltándose la cola de matchmaking. Reusa `createMatchSession` (el mismo primitivo que ya usaba `startBotMatch`) en vez de duplicar lógica de pairing. Invite es de **un solo uso** y expira a los **5 minutos** (`INVITE_TTL_MS`). Funciona tanto en Casual como en Arena — en Arena valida balance suficiente tanto de quien crea el invite como de quien se une, con el mismo chequeo `balanceOf(store, userId) >= stake` que ya usaba `join_queue`. Si el creador se desconecta, su invite pendiente se borra en el handler `disconnect` (recorrido lineal sobre el Map de invites, aceptable dado el volumen esperado). Cliente: botón "Invite a friend" en `/matchmaking` (visible en ambos modos) muestra el link + botón de copiar; nueva ruta `/invite/[code]/page.tsx` auto-emite `join_invite` al montar y redirige a `/game/[matchId]` en `match_found`, o muestra un mensaje de error simple si el código es inválido/expirado/ya usado. Tests: `apps/server/e2e.invite.test.ts` (7 casos e2e reales con Socket.IO), tests de UI para ambas pantallas nuevas.
+
 ### Bot local en Casual + anti-stalling por turno (2026-07-04)
 
 Modo **"Play vs Computer"** en Casual: botón explícito (`play_vs_bot`) que arranca un match instantáneo contra un bot local, y fallback automático si nadie entra a la cola CASUAL en `BOT_FALLBACK_MS` (10s). El bot (`packages/shared/domain/bot.ts::chooseBotMove`) es una heurística greedy pura (máxima captura, empate al azar) que reusa `legalMoves`/`applyMove`. Siempre juega como P2. Ver Engram `feature/casual-bot-opponent`.

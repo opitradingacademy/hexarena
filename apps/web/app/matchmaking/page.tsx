@@ -37,9 +37,13 @@ function MatchmakingScreen() {
     searchParams.get("mode") === "arena" ? "ARENA" : "CASUAL",
   );
   const [stake, setStake] = useState<number | null>(null);
-  const [status, setStatus] = useState<"idle" | "searching" | "cancelled">("idle");
+  const [status, setStatus] = useState<"idle" | "searching" | "cancelled" | "invite-pending">(
+    "idle",
+  );
   const [depositOpen, setDepositOpen] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [inviteCopied, setInviteCopied] = useState(false);
 
   useEffect(() => {
     const socket = getSocket();
@@ -81,11 +85,18 @@ function MatchmakingScreen() {
         setStatus("idle");
       }
     }
+    function onInviteCreated(payload: { code: string }) {
+      setInviteLink(`${window.location.origin}/invite/${payload.code}`);
+      setInviteCopied(false);
+      setStatus("invite-pending");
+    }
     socket.on("match_found", onMatchFound);
     socket.on("error", onError as never);
+    socket.on("invite_created", onInviteCreated);
     return () => {
       socket.off("match_found", onMatchFound);
       socket.off("error", onError as never);
+      socket.off("invite_created", onInviteCreated);
     };
   }, [router, refreshBalance]);
 
@@ -125,6 +136,7 @@ function MatchmakingScreen() {
 
   function handleCancel() {
     setStatus("cancelled");
+    setInviteLink(null);
     getSocket().emit("cancel_queue", {});
   }
 
@@ -132,6 +144,21 @@ function MatchmakingScreen() {
     setServerError(null);
     setStatus("searching");
     getSocket().emit("play_vs_bot");
+  }
+
+  function handleInviteFriend() {
+    if (mode === "ARENA" && stake == null) return;
+    setServerError(null);
+    getSocket().emit(
+      "create_invite",
+      mode === "CASUAL" ? { mode: "CASUAL" } : { mode: "ARENA", stake: stake ?? undefined },
+    );
+  }
+
+  async function handleCopyInviteLink() {
+    if (!inviteLink) return;
+    await navigator.clipboard.writeText(inviteLink);
+    setInviteCopied(true);
   }
 
   async function handleStakeConfirmed() {
@@ -203,7 +230,34 @@ function MatchmakingScreen() {
         </p>
       )}
 
-      {status === "searching" ? (
+      {status === "invite-pending" ? (
+        <div className="mt-16 flex flex-col items-center gap-4">
+          <p className="text-sm font-semibold uppercase tracking-wide text-arena-cyan">
+            Waiting for your friend to join…
+          </p>
+          <div
+            data-testid="invite-link"
+            className="w-full break-all rounded-xl border border-arena-border bg-arena-surface p-3 text-center text-xs text-slate-300"
+          >
+            {inviteLink}
+          </div>
+          <button
+            type="button"
+            onClick={handleCopyInviteLink}
+            className="w-full rounded-xl bg-arena-cyan py-3 text-sm font-bold uppercase text-arena-bg transition"
+          >
+            {inviteCopied ? "Copied!" : "Copy link"}
+          </button>
+          <p className="text-center text-xs text-slate-400">This link expires in 5 minutes.</p>
+          <button
+            type="button"
+            onClick={handleCancel}
+            className="rounded-xl border border-arena-border px-6 py-2 text-sm font-bold uppercase text-slate-300"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : status === "searching" ? (
         <div className="mt-16 flex flex-col items-center gap-4">
           <div className="h-20 w-20 animate-spin rounded-full border-4 border-arena-cyan/20 border-t-arena-cyan" />
           <p className="text-sm font-semibold uppercase tracking-wide text-arena-cyan">
@@ -241,6 +295,14 @@ function MatchmakingScreen() {
               Play vs Computer
             </button>
           )}
+          <button
+            type="button"
+            onClick={handleInviteFriend}
+            disabled={mode === "ARENA" && stake == null}
+            className="mt-3 w-full rounded-xl border border-arena-gold/60 py-3 text-sm font-bold uppercase text-arena-gold transition disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            Invite a friend
+          </button>
         </>
       )}
 

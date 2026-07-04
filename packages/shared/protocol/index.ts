@@ -34,11 +34,25 @@ export type ResumePayload = {
   matchId: MatchId;
 };
 
+export type CreateInvitePayload = {
+  mode: GameMode;
+  /** Required when mode === "ARENA"; USD stake amount. */
+  stake?: number;
+};
+
+export type JoinInvitePayload = {
+  code: string;
+};
+
 export type ClientToServerEvents = {
   join_queue: (payload: JoinQueuePayload) => void;
   cancel_queue: (payload: CancelQueuePayload) => void;
   /** Skips the queue entirely — starts an immediate solo CASUAL match against the local bot. */
   play_vs_bot: () => void;
+  /** Generates a single-use invite code that pairs the creator with whoever calls join_invite. */
+  create_invite: (payload: CreateInvitePayload) => void;
+  /** Skips the queue entirely — pairs directly with the invite's creator. */
+  join_invite: (payload: JoinInvitePayload) => void;
   make_move: (payload: MakeMovePayload) => void;
   resign: (payload: ResignPayload) => void;
   resume: (payload: ResumePayload) => void;
@@ -94,6 +108,12 @@ export type OpponentDisconnectedPayload = {
 
 export type OpponentReconnectedPayload = Record<string, never>;
 
+export type InviteCreatedPayload = {
+  code: string;
+  /** Epoch ms — the invite stops working after this (single-use, short TTL). */
+  expiresAt: number;
+};
+
 export type ArenaSettlementInfo = {
   prizeUSD: number;
   settleTxPending: boolean;
@@ -123,6 +143,7 @@ export type ServerToClientEvents = {
   clock_tick: (payload: ClockTickPayload) => void;
   opponent_disconnected: (payload: OpponentDisconnectedPayload) => void;
   opponent_reconnected: (payload: OpponentReconnectedPayload) => void;
+  invite_created: (payload: InviteCreatedPayload) => void;
   game_over: (payload: GameOverPayload) => void;
   error: (payload: ErrorPayload) => void;
 };

@@ -8,7 +8,7 @@ import type { Server as HttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { createPublicClient, http, isAddress, getAddress, type PublicClient } from "viem";
 import { celo } from "viem/chains";
-import type { ClientToServerEvents, ServerToClientEvents } from "@hexarena/shared/protocol";
+import type { ClientToServerEvents, GameMode, ServerToClientEvents } from "@hexarena/shared/protocol";
 import { serializeGameState, type PlayerId } from "@hexarena/shared/domain/board";
 import { BOT_USER_ID } from "@hexarena/shared/domain/bot";
 import type { LedgerStore, UserId } from "./ledger/types";
@@ -28,6 +28,8 @@ type CeloPublicClient = Pick<PublicClient, "getTransactionReceipt">;
 
 /** How long a CASUAL queue entry waits for a human before falling back to the bot. */
 const BOT_FALLBACK_MS = 10_000;
+/** Invite links are single-use and short-lived — no point keeping a stale one around. */
+const INVITE_TTL_MS = 5 * 60 * 1000;
 
 export type CreateServerOpts = {
   /** Treasury address that receives user Arena stakes. Required for /api/deposit. */
@@ -201,6 +203,11 @@ export function createServer(
   const activeMatchByUser = new Map<UserId, string>();
   /** userId -> pending "no human showed up" bot-fallback timer for CASUAL queue entries. */
   const botFallbackTimers = new Map<UserId, ReturnType<typeof setTimeout>>();
+  /** code -> pending invite, single-use and short-lived. */
+  const invites = new Map<
+    string,
+    { inviterUserId: UserId; mode: GameMode; stake: number; expiresAt: number }
+  >();
 
   function clearBotFallback(userId: UserId): void {
     const timer = botFallbackTimers.get(userId);
@@ -332,6 +339,47 @@ export function createServer(
       startBotMatch(userId);
     });
 
+    socket.on("create_invite", (payload) => {
+      if (payload.mode === "ARENA" && balanceOf(store, userId) < (payload.stake ?? 0)) {
+        socket.emit("error", {
+          code: "INSUFFICIENT_BALANCE",
+          msg: "Insufficient balance for stake",
+        });
+        return;
+      }
+      const code = randomUUID().slice(0, 8);
+      const expiresAt = Date.now() + INVITE_TTL_MS;
+      invites.set(code, { inviterUserId: userId, mode: payload.mode, stake: payload.stake ?? 0, expiresAt });
+      socket.emit("invite_created", { code, expiresAt });
+    });
+
+    socket.on("join_invite", ({ code }) => {
+      const invite = invites.get(code);
+      if (!invite || Date.now() > invite.expiresAt) {
+        invites.delete(code);
+        socket.emit("error", { code: "NOT_FOUND", msg: "Invite is invalid or has expired" });
+        return;
+      }
+      if (invite.inviterUserId === userId) {
+        socket.emit("error", { code: "INVALID_STATE", msg: "You can't join your own invite" });
+        return;
+      }
+      if (!socketsByUser.get(invite.inviterUserId)) {
+        invites.delete(code);
+        socket.emit("error", { code: "NOT_FOUND", msg: "Invite is invalid or has expired" });
+        return;
+      }
+      if (invite.mode === "ARENA" && balanceOf(store, userId) < invite.stake) {
+        socket.emit("error", {
+          code: "INSUFFICIENT_BALANCE",
+          msg: "Insufficient balance for stake",
+        });
+        return;
+      }
+      invites.delete(code);
+      createMatchSession({ P1: invite.inviterUserId, P2: userId }, invite.mode, invite.stake);
+    });
+
     socket.on("cancel_queue", () => {
       matchmaker.cancel(userId);
       clearBotFallback(userId);
@@ -353,6 +401,9 @@ export function createServer(
     socket.on("disconnect", () => {
       socketsByUser.delete(userId);
       clearBotFallback(userId);
+      for (const [code, invite] of invites) {
+        if (invite.inviterUserId === userId) invites.delete(code);
+      }
       const matchId = activeMatchByUser.get(userId);
       if (matchId) sessions.get(matchId)?.disconnect(userId);
     });
