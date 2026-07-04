@@ -10,9 +10,13 @@ Desarrollo guiado por SDD (Spec-Driven Development), modo **hybrid** (artefactos
 - Estado del DAG: `openspec/changes/hexarena-mvp/state.yaml` — siempre revisar ahí antes de asumir qué fase sigue.
 - Progreso de implementación detallado: Engram, topic_key `sdd/hexarena-mvp/apply-progress`.
 
-**Al día de hoy (2026-07-03, cierre de sesión de debugging extendida):**
+**Al día de hoy (2026-07-03, cierre de sesión de debugging extendida + feature de carga de saldo desde el Home):**
 
 - PR1–PR5 completados, deployados en producción.
+- **Feature "Cargar saldo desde el Home" completada y deployada** (ver `implementation_plan.md`): el Dashboard (`apps/web/app/page.tsx`) muestra una única tarjeta de balance premium con Game Balance (Ledger) + Wallet Balance (on-chain) y un botón "Deposit" que abre el mismo flujo de `StakeConfirmDialog`. Se retiró intencionalmente el `WalletWidget` del navbar (arriba a la derecha) por quedar redundante y confuso al lado de la tarjeta — `WalletWidget.tsx`/`.test.tsx` quedan en el repo sin uso actual, por si se reutilizan en otra pantalla. Commits: `fa08f39` (feature), `b278db4` (fix `reload` vs `refresh` en `useUsdtBalance`), `1c2bff5` (remove navbar widget).
+- **Gotcha de deploy**: correr `vercel --prod` desde `apps/web` ignora el `vercel.json` de la raíz y usa npm en vez de pnpm, rompiendo por el protocolo `workspace:^`. Siempre correr `vercel --prod` desde la raíz del repo.
+- **Gotcha de tests**: Vitest en este repo NO tipa (esbuild transpile-only) — un nombre de propiedad incorrecto en el valor de retorno de un hook (ej. `refresh` vs `reload`) pasa los tests pero rompe `next build`. Correr `pnpm exec tsc --noEmit` (o confiar en el build de Next) antes de dar un cambio por terminado.
+- **Test flaky preexistente (no resuelto, no bloqueante)**: `apps/web/app/matchmaking/page.test.tsx` — el placeholder "Loading wallet…" y el `StakeConfirmDialog` real comparten `data-testid="stake-confirm-dialog"`, por lo que `waitFor(() => getByTestId(...))` a veces resuelve sobre el placeholder antes de que `senderAddress` esté listo, y el click subsiguiente en `stake-confirm-button` falla. Afecta 2/186 tests de forma intermitente.
 - Operator treasury address real configurada en Railway: `0x34d5d015B4805E985619D0F4aaCb6343a6457fF2` (separada de la wallet del user).
 - 169/169 tests Vitest verde al cierre de cada PR; serie de fixes de esta sesión movió la suite a **186/186 verde**.
 
