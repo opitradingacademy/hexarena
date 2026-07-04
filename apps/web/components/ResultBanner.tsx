@@ -12,6 +12,7 @@ const REASON_LABEL: Record<GameOverPayload["reason"], string> = {
   timeout: "Time out",
   resign: "Opponent resigned",
   abandon: "Opponent left",
+  "turn-timeout": "Ran out of time to move",
 };
 
 /**

@@ -44,11 +44,23 @@ export type MatchSessionDeps = {
   clearTimeoutFn?: typeof clearTimeout;
   setIntervalFn?: typeof setInterval;
   clearIntervalFn?: typeof clearInterval;
+  /** Injectable for tests; defaults to TURN_TIMEOUT_MS (45s). */
+  turnTimeoutMs?: number;
 };
 
 const TICK_MS = 1000;
 /** Delay before the bot plays its move — feels less robotic than instant. */
 const BOT_MOVE_DELAY_MS = 700;
+/**
+ * How long a human has to make a move once it's their turn. Without this,
+ * a player who's ahead on captures could simply stop moving — the shared
+ * match clock keeps running regardless of whose turn it is (by design,
+ * see shared-match-timer), so stalling would let them ride out the clock
+ * to a guaranteed majority win with the opponent unable to do anything
+ * about it. Forfeiting to the opponent on turn inactivity removes that
+ * incentive entirely, independent of the piece-count majority rule.
+ */
+const TURN_TIMEOUT_MS = 45_000;
 
 function reasonFor(end: { reason?: "majority" | "draw" | "timeout" }): GameOverReason {
   return end.reason === "timeout" ? "timeout" : (end.reason ?? "majority");
@@ -61,6 +73,7 @@ export class MatchSession {
   readonly players: Record<PlayerId, UserId>;
   state: GameState;
   private readonly botPlayer?: PlayerId;
+  private readonly turnTimeoutMs: number;
   private store: LedgerStore;
   private emit: MatchSessionDeps["emit"];
   private setTimeoutFn: typeof setTimeout;
@@ -68,6 +81,7 @@ export class MatchSession {
   private setIntervalFn: typeof setInterval;
   private clearIntervalFn: typeof clearInterval;
   private graceTimers: Partial<Record<PlayerId, ReturnType<typeof setTimeout>>> = {};
+  private turnTimer: ReturnType<typeof setTimeout> | undefined;
   private clockInterval: ReturnType<typeof setInterval>;
   /** Total ms allotted for the shared match clock — fixed at match creation, used to recompute `matchClockMs` from `Date.now()` each tick (design D2, avoids `setInterval` drift). */
   private readonly totalMatchClockMs: number;
@@ -79,6 +93,7 @@ export class MatchSession {
     this.stake = deps.stake;
     this.players = deps.players;
     this.botPlayer = deps.botPlayer;
+    this.turnTimeoutMs = deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
     this.store = deps.store;
     this.emit = deps.emit;
     this.setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
@@ -124,6 +139,7 @@ export class MatchSession {
     }, TICK_MS);
 
     this.maybeScheduleBotMove();
+    this.startTurnTimer();
   }
 
   private playerIdFor(userId: UserId): PlayerId | undefined {
@@ -142,6 +158,24 @@ export class MatchSession {
       if (!move) return;
       this.makeMove(BOT_USER_ID, move);
     }, BOT_MOVE_DELAY_MS);
+  }
+
+  /** Forfeits the match to whoever ISN'T stalling if the current turn holder doesn't move in time. */
+  private startTurnTimer(): void {
+    this.clearTurnTimer();
+    if (this.finished || this.state.turn === this.botPlayer) return;
+    const stallingPlayer = this.state.turn;
+    this.turnTimer = this.setTimeoutFn(() => {
+      if (this.finished) return;
+      this.finalize("turn-timeout", otherPlayer(stallingPlayer));
+    }, this.turnTimeoutMs);
+  }
+
+  private clearTurnTimer(): void {
+    if (this.turnTimer) {
+      this.clearTimeoutFn(this.turnTimer);
+      this.turnTimer = undefined;
+    }
   }
 
   makeMove(userId: UserId, at: { q: number; r: number }): void {
@@ -174,6 +208,7 @@ export class MatchSession {
       this.finalize(reasonFor(end), end.winner ?? null);
     } else {
       this.maybeScheduleBotMove();
+      this.startTurnTimer();
     }
   }
 
@@ -189,6 +224,10 @@ export class MatchSession {
     const player = this.playerIdFor(userId);
     if (!player) return;
 
+    // The disconnect grace window supersedes the turn timer while it runs —
+    // otherwise a stalled turn-timeout could fire mid-grace-window with a
+    // less accurate "turn-timeout" reason instead of "abandon".
+    this.clearTurnTimer();
     this.emit("*", "opponent_disconnected", { graceMs: DISCONNECT_GRACE_MS });
     this.graceTimers[player] = this.setTimeoutFn(() => {
       if (this.finished) return;
@@ -204,6 +243,7 @@ export class MatchSession {
     this.clearTimeoutFn(timer);
     delete this.graceTimers[player];
     this.emit("*", "opponent_reconnected", {});
+    this.startTurnTimer();
     return true;
   }
 
@@ -211,6 +251,7 @@ export class MatchSession {
     if (this.finished) return;
     this.finished = true;
     this.clearIntervalFn(this.clockInterval);
+    this.clearTurnTimer();
     for (const timer of Object.values(this.graceTimers)) {
       if (timer) this.clearTimeoutFn(timer);
     }
@@ -253,6 +294,7 @@ export class MatchSession {
     if (this.finished) return;
     this.finished = true;
     this.clearIntervalFn(this.clockInterval);
+    this.clearTurnTimer();
     for (const timer of Object.values(this.graceTimers)) {
       if (timer) this.clearTimeoutFn(timer);
     }

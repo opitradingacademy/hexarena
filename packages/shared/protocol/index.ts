@@ -99,7 +99,7 @@ export type ArenaSettlementInfo = {
   settleTxPending: boolean;
 };
 
-export type GameOverReason = "majority" | "draw" | "timeout" | "resign" | "abandon";
+export type GameOverReason = "majority" | "draw" | "timeout" | "resign" | "abandon" | "turn-timeout";
 
 export type GameOverPayload = {
   winner: PlayerId | null;

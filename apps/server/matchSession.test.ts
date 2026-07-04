@@ -9,7 +9,7 @@ import { legalMoves, type PlayerId } from "@hexarena/shared/domain/board";
 function makeSession(
   mode: "CASUAL" | "ARENA",
   stake = 0.1,
-  opts: { botPlayer?: PlayerId; p2?: string } = {},
+  opts: { botPlayer?: PlayerId; p2?: string; turnTimeoutMs?: number } = {},
 ) {
   const store = new MemoryLedgerStore();
   const p2 = opts.p2 ?? "p2";
@@ -27,6 +27,7 @@ function makeSession(
     players: { P1: "p1", P2: p2 },
     store,
     botPlayer: opts.botPlayer,
+    turnTimeoutMs: opts.turnTimeoutMs,
     emit: (userId, event, payload) => events.push({ userId: userId as string, event, payload }),
   });
   return { session, store, events };
@@ -117,7 +118,11 @@ describe("MatchSession — Shared Match Clock (shared-match-timer)", () => {
   });
 
   it("ends the match by piece-count majority when the shared clock expires — NOT an automatic loss for whoever had the turn", () => {
-    const { session, events } = makeSession("CASUAL");
+    // Isolated from the turn-timeout anti-stalling rule (a separate concern,
+    // see "turn-timeout forfeit" below) via a turnTimeoutMs longer than the
+    // shared clock, so this test can still simulate "nobody moves for the
+    // whole match" without tripping the 45s forfeit first.
+    const { session, events } = makeSession("CASUAL", 0.1, { turnTimeoutMs: 4 * 60 * 1000 });
     // P1 starts with 3 cells vs P2's 3 cells; no moves made, so majority is a
     // draw — the important assertion is `reason` still fires via the clock
     // and the winner is computed by the majority rule, not "P2 always wins
@@ -162,5 +167,69 @@ describe("MatchSession — local bot opponent (CASUAL)", () => {
     vi.advanceTimersByTime(5000);
 
     expect(events.filter((e) => e.event === "move_result")).toHaveLength(0);
+  });
+
+});
+
+describe("MatchSession — turn-timeout forfeit (anti-stalling)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("forfeits to the opponent if the current turn holder never moves", () => {
+    const { session, events } = makeSession("CASUAL");
+    expect(session.state.turn).toBe("P1");
+
+    vi.advanceTimersByTime(45_000);
+
+    const gameOver = events.find((e) => e.event === "game_over")!;
+    expect(gameOver.payload).toMatchObject({ winner: "P2", reason: "turn-timeout" });
+  });
+
+  it("does not forfeit if the turn holder moves before the timeout elapses", () => {
+    const { session, events } = makeSession("CASUAL");
+    const legalP1Move = legalMoves(session.state, "P1")[0];
+
+    vi.advanceTimersByTime(44_000);
+    session.makeMove("p1", legalP1Move);
+    vi.advanceTimersByTime(44_000);
+
+    expect(events.find((e) => e.event === "game_over")).toBeUndefined();
+  });
+
+  it("resets the timeout window for each new turn holder", () => {
+    const { session, events } = makeSession("CASUAL");
+    const legalP1Move = legalMoves(session.state, "P1")[0];
+    session.makeMove("p1", legalP1Move);
+    expect(session.state.turn).toBe("P2");
+
+    // P2 now gets a fresh 45s window — stalling from P1's earlier turn
+    // must not carry over and prematurely forfeit P2.
+    vi.advanceTimersByTime(44_000);
+    expect(events.find((e) => e.event === "game_over")).toBeUndefined();
+
+    vi.advanceTimersByTime(1_000);
+    const gameOver = events.find((e) => e.event === "game_over")!;
+    expect(gameOver.payload).toMatchObject({ winner: "P1", reason: "turn-timeout" });
+  });
+
+  it("does not forfeit a stalled turn while the disconnect grace window is active — abandon takes precedence", () => {
+    const { session, events } = makeSession("CASUAL");
+    session.disconnect("p1");
+
+    vi.advanceTimersByTime(45_000); // past both the turn-timeout and DISCONNECT_GRACE_MS
+    const gameOver = events.find((e) => e.event === "game_over")!;
+    expect(gameOver.payload).toMatchObject({ winner: "P2", reason: "abandon" });
+  });
+
+  it("restarts the turn-timeout clock after a reconnect", () => {
+    const { session, events } = makeSession("CASUAL");
+    session.disconnect("p1");
+    session.resume("p1");
+    events.length = 0;
+
+    vi.advanceTimersByTime(45_000);
+
+    const gameOver = events.find((e) => e.event === "game_over")!;
+    expect(gameOver.payload).toMatchObject({ winner: "P2", reason: "turn-timeout" });
   });
 });
