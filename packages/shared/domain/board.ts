@@ -12,7 +12,10 @@ export type GameStatus = "active" | "finished";
 export type GameState = {
   board: Map<string, PlayerId | null>;
   turn: PlayerId;
-  clocks: Record<PlayerId, number>;
+  /** Single shared match clock, ms remaining. Ticks in real time regardless of whose turn it is — see shared-match-timer design D1/D2. */
+  matchClockMs: number;
+  /** `Date.now()` at match creation — the application layer recomputes `matchClockMs` from this to avoid `setInterval` drift (design D2). */
+  matchStartedAt: number;
   status: GameStatus;
   /** Consecutive forced passes with no capturing move for the player to act. */
   consecutivePasses: number;
@@ -36,7 +39,8 @@ export type EndResult = {
 };
 
 export const BOARD_RADIUS = 4;
-const DEFAULT_CLOCK_MS = 3 * 60 * 1000;
+/** Floor for the shared match clock — spec game-engine "Minimum clock floor". */
+export const MIN_MATCH_CLOCK_MS = 3 * 60 * 1000;
 
 const DIRECTIONS: Axial[] = [
   { q: 1, r: 0 },
@@ -88,7 +92,7 @@ export function deserializeGameState(wire: SerializedGameState): GameState {
   return { ...wire, board: new Map(wire.board) };
 }
 
-export function createGame(_seed?: string): GameState {
+export function createGame(_seed?: string, matchClockMs: number = MIN_MATCH_CLOCK_MS): GameState {
   const board = new Map<string, PlayerId | null>();
   for (const cell of ALL_CELLS) {
     board.set(cellKey(cell), null);
@@ -113,7 +117,8 @@ export function createGame(_seed?: string): GameState {
   return {
     board,
     turn: "P1",
-    clocks: { P1: DEFAULT_CLOCK_MS, P2: DEFAULT_CLOCK_MS },
+    matchClockMs: Math.max(matchClockMs, MIN_MATCH_CLOCK_MS),
+    matchStartedAt: Date.now(),
     status: "active",
     consecutivePasses: 0,
   };
@@ -188,7 +193,8 @@ export function applyMove(state: GameState, player: PlayerId, at: Axial): ApplyM
   const intermediate: GameState = {
     board,
     turn: opponent,
-    clocks: state.clocks,
+    matchClockMs: state.matchClockMs,
+    matchStartedAt: state.matchStartedAt,
     status: "active",
     consecutivePasses: 0,
   };
@@ -220,7 +226,8 @@ export function applyMove(state: GameState, player: PlayerId, at: Axial): ApplyM
     state: {
       board,
       turn,
-      clocks: state.clocks,
+      matchClockMs: state.matchClockMs,
+      matchStartedAt: state.matchStartedAt,
       status,
       consecutivePasses,
     },
@@ -228,18 +235,7 @@ export function applyMove(state: GameState, player: PlayerId, at: Axial): ApplyM
   };
 }
 
-export function checkEnd(state: GameState): EndResult {
-  if (state.clocks[state.turn] <= 0) {
-    return { over: true, winner: otherPlayer(state.turn), reason: "timeout" };
-  }
-
-  const boardFull = [...state.board.values()].every((v) => v !== null);
-  const bothStuck = state.status === "finished";
-
-  if (!boardFull && !bothStuck) {
-    return { over: false };
-  }
-
+function majorityResult(state: GameState): EndResult {
   let p1 = 0;
   let p2 = 0;
   for (const v of state.board.values()) {
@@ -251,4 +247,24 @@ export function checkEnd(state: GameState): EndResult {
     return { over: true, winner: null, reason: "draw" };
   }
   return { over: true, winner: p1 > p2 ? "P1" : "P2", reason: "majority" };
+}
+
+export function checkEnd(state: GameState): EndResult {
+  // Shared-clock expiry no longer means an automatic loss for whoever had the
+  // turn (the old per-player sudden-death rule). It is now just a TRIGGER that
+  // forces the same majority-of-cells evaluation used for board-full/both-stuck
+  // — see shared-match-timer spec "Clock Expiry" and design D3.
+  if (state.matchClockMs <= 0) {
+    const result = majorityResult(state);
+    return { ...result, reason: "timeout" };
+  }
+
+  const boardFull = [...state.board.values()].every((v) => v !== null);
+  const bothStuck = state.status === "finished";
+
+  if (!boardFull && !bothStuck) {
+    return { over: false };
+  }
+
+  return majorityResult(state);
 }

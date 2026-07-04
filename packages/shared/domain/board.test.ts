@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createGame, cellKey, ALL_CELLS, serializeGameState, deserializeGameState } from "./board";
+import { createGame, cellKey, ALL_CELLS, serializeGameState, deserializeGameState, MIN_MATCH_CLOCK_MS } from "./board";
 
 describe("createGame", () => {
   it("creates a radius-4 hex board with 61 cells", () => {
@@ -27,10 +27,20 @@ describe("createGame", () => {
     expect(state.consecutivePasses).toBe(0);
   });
 
-  it("initializes clocks for both players", () => {
+  it("initializes a single shared match clock, not one per player", () => {
     const state = createGame();
-    expect(state.clocks.P1).toBeGreaterThan(0);
-    expect(state.clocks.P2).toBeGreaterThan(0);
+    expect(state.matchClockMs).toBeGreaterThan(0);
+    expect(state.matchStartedAt).toBeGreaterThan(0);
+  });
+
+  it("clamps the initial match clock to a minimum of 3 minutes", () => {
+    const state = createGame(undefined, 1000);
+    expect(state.matchClockMs).toBe(MIN_MATCH_CLOCK_MS);
+  });
+
+  it("accepts a match clock above the minimum as-is", () => {
+    const state = createGame(undefined, MIN_MATCH_CLOCK_MS + 60_000);
+    expect(state.matchClockMs).toBe(MIN_MATCH_CLOCK_MS + 60_000);
   });
 });
 
@@ -46,7 +56,8 @@ describe("GameState wire (de)serialization — Socket.IO JSON boundary", () => {
       expect(restored.board.get(key)).toBe(value);
     }
     expect(restored.turn).toBe(state.turn);
-    expect(restored.clocks).toEqual(state.clocks);
+    expect(restored.matchClockMs).toEqual(state.matchClockMs);
+    expect(restored.matchStartedAt).toEqual(state.matchStartedAt);
     expect(restored.status).toBe(state.status);
     expect(restored.consecutivePasses).toBe(state.consecutivePasses);
   });

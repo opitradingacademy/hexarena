@@ -62,12 +62,41 @@ describe("checkEnd", () => {
     expect(result.over).toBe(false);
   });
 
-  it("ends in favor of the opponent when the current player's clock expires", () => {
-    const state = createGame();
-    state.clocks.P1 = 0;
+  it("ends the match by piece-count majority when the shared clock expires, NOT an automatic loss for whoever had the turn", () => {
+    const state = emptyState({ status: "active", turn: "P1" });
+    let i = 0;
+    for (const key of state.board.keys()) {
+      // P1 controls a clear majority of the occupied cells, board not full.
+      state.board.set(key, i < 40 ? "P1" : i < 55 ? "P2" : null);
+      i++;
+    }
+    state.matchClockMs = 0;
+
     const result = checkEnd(state);
     expect(result.over).toBe(true);
-    expect(result.winner).toBe("P2");
+    expect(result.winner).toBe("P1");
     expect(result.reason).toBe("timeout");
+  });
+
+  it("ends in a draw when the shared clock expires with equal cell counts", () => {
+    const state = emptyState({ status: "active", turn: "P1" });
+    let i = 0;
+    for (const key of state.board.keys()) {
+      state.board.set(key, i < 30 ? "P1" : i < 60 ? "P2" : null);
+      i++;
+    }
+    state.matchClockMs = 0;
+
+    const result = checkEnd(state);
+    expect(result.over).toBe(true);
+    expect(result.winner).toBeNull();
+    expect(result.reason).toBe("timeout");
+  });
+
+  it("does not treat clock expiry as game-over while matchClockMs is still positive", () => {
+    const state = createGame();
+    state.matchClockMs = 1;
+    const result = checkEnd(state);
+    expect(result.over).toBe(false);
   });
 });

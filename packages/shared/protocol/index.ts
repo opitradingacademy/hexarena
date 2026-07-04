@@ -54,7 +54,8 @@ export type MatchFoundPayload = {
   color: PlayerId;
   /** JSON-safe wire form — reconstruct with `deserializeGameState` from `@hexarena/shared/domain/board`. */
   initialState: SerializedGameState;
-  clocks: Record<PlayerId, number>;
+  /** Single shared match clock (ms remaining) — see shared-match-timer spec. Identical for both clients; there is only one clock. */
+  matchClockMs: number;
 };
 
 export type MoveResultPayload = {
@@ -64,7 +65,8 @@ export type MoveResultPayload = {
   captures: Axial[];
   /** JSON-safe wire form — reconstruct with `deserializeGameState` from `@hexarena/shared/domain/board`. */
   nextState: SerializedGameState;
-  clocks: Record<PlayerId, number>;
+  /** Single shared match clock (ms remaining) — see shared-match-timer spec. */
+  matchClockMs: number;
 };
 
 export type MoveRejectedReason =
@@ -79,7 +81,8 @@ export type MoveRejectedPayload = {
 };
 
 export type ClockTickPayload = {
-  clocks: Record<PlayerId, number>;
+  /** Single shared match clock (ms remaining) — see shared-match-timer spec "Shared Clock Tick Broadcast". */
+  matchClockMs: number;
 };
 
 export type OpponentDisconnectedPayload = {

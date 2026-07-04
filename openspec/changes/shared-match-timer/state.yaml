@@ -1,0 +1,52 @@
+change: shared-match-timer
+phases:
+  proposal:
+    status: done
+    backend: openspec (engram backfilled by team-lead)
+  specs:
+    status: done
+    backend: openspec (engram no disponible en esta sesión)
+    domains: [game-engine, realtime-protocol, minipay-client]
+  design:
+    status: done
+    backend: openspec (engram no disponible en esta sesión)
+  tasks:
+    status: done
+    backend: openspec (engram no disponible en esta sesión)
+    total_tasks: 24
+    delivery_strategy: ask-on-risk — chain strategy CONFIRMED por el usuario 2026-07-03 (3 PRs encadenados)
+  apply:
+    status: done
+    backend: openspec (engram no disponible en esta sesión)
+    completed_prs:
+      - "PR1: packages/shared (Phase 1, 9/9 tasks). GameState.clocks: Record<PlayerId,number> -> matchClockMs: number + matchStartedAt: number. checkEnd() unifica timeout con evaluacion de mayoria (D3). protocol/index.ts: MatchFoundPayload/MoveResultPayload/ClockTickPayload usan matchClockMs. Tests: board.test.ts + checkEnd.test.ts reescritos, 24/24 verde."
+      - "PR2: apps/server (Phase 2, 7/7 tasks). matchSession.ts: setInterval reescrito, ya no mira state.turn, recalcula matchClockMs = max(0, totalMatchClockMs - (Date.now() - matchStartedAt)) cada tick (D2, evita drift). Nuevo helper reasonFor(end) compartido entre el interval y makeMove(). move_result y match_found (server.ts) emiten matchClockMs. Tests: matchSession.test.ts reescrito. packages/shared + apps/server juntos: 17 test files, 85/85 verde."
+      - "PR3: apps/web (Phase 3+4, 6/6 + 1/1 tasks). Eliminado PlayerClock.tsx/.test.tsx (dos relojes por jugador). Nuevo components/MatchClock.tsx (reloj unico compartido). Nuevo lib/captureCount.ts (countPieces, funcion pura) + components/PlayerStatusRow.tsx (turno + conteo de capturas, reemplaza el rol de PlayerClock sin el reloj). game/[matchId]/page.tsx actualizado: MatchClock arriba + 2 PlayerStatusRow, agregado handler clock_tick para actualizar matchClockMs en vivo. docs/timers.md reescrito con seccion 'Version anterior (reemplazada)'. apps/web: 27 test files, 111/111 verde."
+    full_suite: "npx vitest run (monorepo completo) -> 44 test files, 196/196 tests verde. lint:copy (apps/web/bin/check-copy-rules.ts) -> 15 files scanned, 0 violaciones."
+    pending_manual_smoke:
+      - "5.2: smoke manual de partida completa terminada por clock-expiry con piezas desparejas — requiere entorno corriendo (dev server + 2 clientes), no ejecutado en esta sesión de apply automatizada."
+      - "5.3: smoke manual de partida terminada por board-full antes de que el reloj llegue a 0 — mismo motivo."
+  verify:
+    status: done
+    backend: openspec (engram no disponible en esta sesión)
+    result: PASS
+    critical: 0
+    warnings:
+      - "5.2/5.3 smoke manual con partida real (clock-expiry / board-full) siguen pendientes — no bloqueante para merge de codigo, si para dar el cambio por cerrado en produccion."
+      - "docs/timers.md nunca estuvo trackeado en git (git log vacio para ese path) — no introducido por este cambio, pero hay que git add explicito al commitear."
+    suggestions:
+      - "design.md documenta checkEnd(state, now = Date.now()) opcional; la implementacion final es checkEnd(state) puro (Date.now() vive solo en matchSession.ts). Simplificacion valida, vale actualizar design.md para reflejar el contrato real."
+      - "Confirmado explicitamente que arena-settlement 'Draw Refund Minus House Rake' depende de winner===null, no del string reason — sin accion requerida, documentado por ser el punto de mayor riesgo de regresion silenciosa en Arena."
+    checks_run:
+      - "npx vitest run -> 44 test files, 196/196 verde"
+      - "npx tsc --noEmit -p packages/shared/tsconfig.json -> 0 errores"
+      - "npx tsc --noEmit -p apps/server/tsconfig.json -> 0 errores"
+      - "npx tsc --noEmit -p apps/web/tsconfig.json -> 4 errores preexistentes en StakeConfirmDialog.test.tsx (archivo no tocado por este cambio, confirmado con git diff --stat)"
+      - "apps/web/bin/check-copy-rules.ts -> 15 files scanned, 0 violaciones"
+      - "grep de 'state.clocks'/'Record<PlayerId, number>' en todo el repo -> 0 resultados (sin leftovers)"
+  archive:
+    status: pending
+execution_mode: interactive
+artifact_store: hybrid (nota: esta sesión no tuvo acceso a herramientas MCP de Engram; solo se persistió en openspec/. team-lead está backfilleando a Engram)
+delivery_strategy: ask-on-risk
+last_updated: 2026-07-03
