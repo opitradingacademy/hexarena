@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ArenaSettlement} from "../src/ArenaSettlement.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @dev Covers arena-settlement spec requirements owned by this contract:
@@ -166,5 +167,166 @@ contract ArenaSettlementTest is Test {
         vm.prank(stranger);
         vm.expectRevert();
         arena.setOperator(stranger);
+    }
+
+    // ---------------------------------------------------------------------
+    // withdrawUser (operator-driven user cash-out, PR0 of the cash-out change).
+    // Idempotency is the central invariant — every test asserts against a
+    // unique withdrawalId unless it is specifically testing the duplicate-revert
+    // case. `settled[]` and `withdrawn[]` must remain independent mappings;
+    // see `test_withdrawUser_doesNotInterfereWithSettle` below.
+    // ---------------------------------------------------------------------
+
+    /// @dev Scenario: "First user withdrawal succeeds".
+    function test_withdrawUser_firstTime_succeeds() public {
+        bytes32 withdrawalId = keccak256("withdrawal-1");
+        uint256 amount = 1 ether;
+        uint256 arenaBalanceBefore = token.balanceOf(address(arena));
+
+        vm.expectEmit(true, true, false, true, address(arena));
+        emit ArenaSettlement.UserWithdrawn(withdrawalId, winner, amount);
+
+        vm.prank(operator);
+        arena.withdrawUser(withdrawalId, winner, amount);
+
+        assertTrue(arena.withdrawn(withdrawalId));
+        assertEq(token.balanceOf(winner), amount);
+        assertEq(token.balanceOf(address(arena)), arenaBalanceBefore - amount);
+    }
+
+    /// @dev Scenario: "Duplicate withdrawalId rejected, no double payout".
+    function test_withdrawUser_duplicateWithdrawalId_reverts() public {
+        bytes32 withdrawalId = keccak256("withdrawal-dup");
+        uint256 amount = 7 ether;
+
+        vm.prank(operator);
+        arena.withdrawUser(withdrawalId, winner, amount);
+
+        // Second call reverts with the specific idempotency error.
+        vm.prank(operator);
+        vm.expectRevert(
+            abi.encodeWithSelector(ArenaSettlement.AlreadyWithdrawn.selector, withdrawalId)
+        );
+        arena.withdrawUser(withdrawalId, winner, amount);
+
+        // User credited exactly once.
+        assertEq(token.balanceOf(winner), amount);
+    }
+
+    /// @dev Scenario: "Non-operator caller rejected".
+    function test_withdrawUser_calledByNonOperator_reverts() public {
+        bytes32 withdrawalId = keccak256("withdrawal-stranger");
+
+        vm.prank(stranger);
+        vm.expectRevert(ArenaSettlement.NotOperator.selector);
+        arena.withdrawUser(withdrawalId, winner, 1 ether);
+
+        assertFalse(arena.withdrawn(withdrawalId));
+    }
+
+    /// @dev Scenario: "Paused contract blocks user withdrawals too". Mirrors
+    ///      the `settle_whilePaused_reverts` invariant — `whenNotPaused` is
+    ///      applied uniformly to every operator-driven payout path.
+    function test_withdrawUser_whilePaused_reverts() public {
+        bytes32 withdrawalId = keccak256("withdrawal-paused");
+
+        vm.prank(owner);
+        arena.pause();
+
+        vm.prank(operator);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        arena.withdrawUser(withdrawalId, winner, 1 ether);
+
+        assertFalse(arena.withdrawn(withdrawalId));
+    }
+
+    /// @dev Scenario: "Zero `to` address rejected". The contract would
+    ///      otherwise burn tokens to address(0) — unrecoverable.
+    function test_withdrawUser_zeroAddress_reverts() public {
+        bytes32 withdrawalId = keccak256("withdrawal-zero-addr");
+
+        vm.prank(operator);
+        vm.expectRevert(ArenaSettlement.ZeroAddress.selector);
+        arena.withdrawUser(withdrawalId, address(0), 1 ether);
+
+        assertFalse(arena.withdrawn(withdrawalId));
+    }
+
+    /// @dev Scenario: "Zero amount rejected". A zero-amount success would
+    ///      still consume the withdrawalId (idempotency slot) for no reason,
+    ///      so we reject it explicitly.
+    function test_withdrawUser_zeroAmount_reverts() public {
+        bytes32 withdrawalId = keccak256("withdrawal-zero-amt");
+
+        vm.prank(operator);
+        vm.expectRevert(ArenaSettlement.ZeroAmount.selector);
+        arena.withdrawUser(withdrawalId, winner, 0);
+
+        assertFalse(arena.withdrawn(withdrawalId));
+    }
+
+    /// @dev Scenario: "Withdrawal larger than available float rejected".
+    ///      Mirrors the same check on the owner-only `withdraw`.
+    function test_withdrawUser_moreThanFloat_reverts() public {
+        bytes32 withdrawalId = keccak256("withdrawal-too-big");
+
+        vm.prank(operator);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ArenaSettlement.InsufficientFloat.selector, FLOAT + 1 ether, FLOAT
+            )
+        );
+        arena.withdrawUser(withdrawalId, winner, FLOAT + 1 ether);
+
+        assertFalse(arena.withdrawn(withdrawalId));
+    }
+
+    /// @dev Scenario: "Settled vs withdrawn mappings are independent".
+    ///      Critical for ops: the backend relies on a single `withdrawalId`
+    ///      namespace that does NOT collide with `matchId` — even if a
+    ///      user constructs an `amount` that matches a settle-payout and
+    ///      hashes the same bytes, the two paths must not interfere. This
+    ///      test pins both code paths in the same scenario.
+    function test_withdrawUser_doesNotInterfereWithSettle() public {
+        bytes32 matchId = keccak256("match-cashout-coexist");
+        bytes32 withdrawalId = keccak256("withdrawal-cashout-coexist");
+        uint256 settleAmount = 4 ether;
+        uint256 withdrawAmount = 3 ether;
+
+        // Settle first.
+        vm.prank(operator);
+        arena.settle(matchId, winner, settleAmount);
+
+        assertTrue(arena.settled(matchId));
+        assertFalse(arena.withdrawn(withdrawalId));
+
+        // Withdraw next — must not be blocked by the prior settle.
+        vm.prank(operator);
+        arena.withdrawUser(withdrawalId, winner, withdrawAmount);
+
+        assertTrue(arena.withdrawn(withdrawalId));
+        assertEq(token.balanceOf(winner), settleAmount + withdrawAmount);
+        assertEq(token.balanceOf(address(arena)), FLOAT - settleAmount - withdrawAmount);
+    }
+
+    /// @dev Scenario: "Zero withdrawalId is allowed (single-use slot)".
+    ///      Documents the deliberate decision NOT to validate
+    ///      `withdrawalId != bytes32(0)` — the empty key is a valid,
+    ///      single-use idempotency slot, identical in treatment to how
+    ///      `settle` does not validate `matchId != bytes32(0)`. Adding the
+    ///      check would be gas-for-nothing.
+    function test_withdrawUser_zeroWithdrawalId_allowed_singleUse() public {
+        vm.prank(operator);
+        arena.withdrawUser(bytes32(0), winner, 1 ether);
+
+        assertTrue(arena.withdrawn(bytes32(0)));
+        assertEq(token.balanceOf(winner), 1 ether);
+
+        // Re-using the zero key reverts — proving it IS single-use.
+        vm.prank(operator);
+        vm.expectRevert(
+            abi.encodeWithSelector(ArenaSettlement.AlreadyWithdrawn.selector, bytes32(0))
+        );
+        arena.withdrawUser(bytes32(0), winner, 1 ether);
     }
 }
