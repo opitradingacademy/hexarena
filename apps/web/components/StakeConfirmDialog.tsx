@@ -105,57 +105,24 @@ export function StakeConfirmDialog({
     }
 
     setStatus({ kind: "confirming", txHash });
-    // TEMP DIAG 2026-07-03: surface the receipt-fetch fork so we can
-    // confirm on-device whether the bug we're fixing hits this exact
-    // path (and that the server-side slow path is reached). Safe to
-    // remove once Arena deposit is verified end-to-end on physical
-    // device.
-    type ReceiptFetchResult =
-      { kind: "ok"; receipt: Record<string, unknown> | null } | { kind: "throw"; error: unknown };
-    let receiptFetch: ReceiptFetchResult = { kind: "ok", receipt: null };
-    try {
-      // Try to fetch the receipt from the same provider-stub that signed
-      // the tx — that nodo has it immediately, no propagation latency.
-      // Sending the receipt lets the server validate without polling.
-      const receipt = (await ethereum.request({
-        method: "eth_getTransactionReceipt",
-        params: [txHash],
-      })) as Record<string, unknown> | null;
-      receiptFetch = { kind: "ok", receipt };
-    } catch (e) {
-      receiptFetch = { kind: "throw", error: e };
-    }
-    // TEMP DIAG 2026-07-03: log which fork we hit so device study can
-    // confirm root cause. Strings grep-able as [HexArena:diag].
-    if (receiptFetch.kind === "throw") {
-      const msg = (receiptFetch.error as Error)?.message ?? String(receiptFetch.error);
-      console.log(
-        `[HexArena:diag] deposit receipt fetch THREW — delegating to server slow path. ` +
-          `txHash=${txHash} err=${msg}`,
-      );
-    } else if (receiptFetch.receipt === null) {
-      console.log(
-        `[HexArena:diag] deposit receipt fetch RETURNED NULL — delegating to server slow path. ` +
-          `txHash=${txHash}`,
-      );
-    } else {
-      console.log(
-        `[HexArena:diag] deposit receipt fetch OK — sending receipt to server. ` +
-          `txHash=${txHash}`,
-      );
-    }
     // Build the POST body. Only attach the receipt when we actually got
     // one back — if the local fetch threw or returned null, omit the
     // field entirely. The server's slow path (verifyDeposit) will poll
     // the public Celo RPC up to 15s and credit the ledger on its own.
     // Re-querying the same stale local view on Retry was never going
     // to converge — the local provider-stub lags behind chain state.
-    const body: { txHash: `0x${string}`; receipt?: Record<string, unknown> } = {
-      txHash,
-    };
-    if (receiptFetch.kind === "ok" && receiptFetch.receipt !== null) {
-      body.receipt = receiptFetch.receipt;
-    }
+    // Best-effort local fetch: same provider-stub that signed the tx
+    // has it immediately, no propagation latency. Swallow any error so
+    // the server slow-path can take over without the UI crashing here.
+    const receipt = (await ethereum
+      .request({
+        method: "eth_getTransactionReceipt",
+        params: [txHash],
+      })
+      .catch(() => null)) as Record<string, unknown> | null;
+    const body: { txHash: `0x${string}`; receipt?: Record<string, unknown> } = receipt
+      ? { txHash, receipt }
+      : { txHash };
     try {
       const res = await fetch(depositServerUrl, {
         method: "POST",
@@ -165,9 +132,6 @@ export function StakeConfirmDialog({
         },
         body: JSON.stringify(body),
       });
-      console.log(
-        `[HexArena:diag] POST /api/deposit responded status=${res.status} txHash=${txHash}`,
-      );
       if (!res.ok) {
         const respBody = (await res.json().catch(() => ({}))) as {
           code?: string;
@@ -183,11 +147,6 @@ export function StakeConfirmDialog({
       }
       onSuccess(txHash);
     } catch (e) {
-      console.log(
-        `[HexArena:diag] POST /api/deposit THREW — txHash=${txHash} err=${
-          (e as Error)?.message ?? String(e)
-        }`,
-      );
       setStatus({
         kind: "server-error",
         txHash,

@@ -24,6 +24,41 @@ Modo **"Play vs Computer"** en Casual: botón explícito (`play_vs_bot`) que arr
 
 `apps/web/components/HexBoard.tsx::computeBoardSize` tenía `centerY = (BOARD_RADIUS + 1) * hexSize` (mal, dejaba el board corrido hacia arriba) — corregido a `centerY = (1.5 * BOARD_RADIUS + 1) * hexSize`, acorde a la escala `1.5 * r` que usa `axialToPixel` para Y. Además el resize handler usaba `window.innerWidth` para dimensionar el board, pero el board vive dentro de un contenedor `max-w-md` — en desktop esto producía un board más ancho que su contenedor, cortado por el `overflow-hidden` del wrapper. Ahora se mide el `clientWidth` del propio wrapper vía `ResizeObserver` (con guard para jsdom, que no lo implementa). Deployado y confirmado por el usuario en producción. Detalle completo en Engram `ui/hex-board-y-centering-bug`.
 
+### Cash out (game balance → USDT on-chain) — probado y funcionando en producción (2026-07-06)
+
+Cierra el loop de Arena: antes los payouts (PAYOUT en el ledger interno) acreditaban Game Balance pero el USDT nunca salía del contrato a la wallet del user. Ahora el botón **"Cash out"** en el Dashboard mueve ese balance interno a USDT real en la MiniPay wallet. Naming elegido por el usuario ("Cash out" en vez de "Withdraw") por claridad para usuarios emergentes — copy rules respetadas: sin "Gas"/"Crypto"/"Onramp", todo en USD/USDT, addresses truncadas `0x1234…5678`.
+
+**Arquitectura — consolidada en un solo contrato.** Toda la actividad on-chain de Arena (settle de premios + cashout de usuarios) fluye por `ArenaSettlement`. Esto se hizo deliberadamente para **talent.app Proof of Ship**: registramos un solo contrato y la sección "Transactions" del perfil del proyecto muestra settle() y withdrawUser() unificados. Contrato anterior (`0x108E012C…`) reemplazado por **nuevo `0x4da63741993F0C5B85148C412bc890ff0659AB3A`** (verificado en Sourcify).
+
+**Cambio clave en el contrato:** nueva función `withdrawUser(bytes32 withdrawalId, address to, uint256 amount)` — `onlyOperator`, `whenNotPaused`, `nonReentrant`, idempotente vía `withdrawn[withdrawalId]` mapping. Diferencia importante con `withdraw(to, amount)` (que sigue existiendo como owner-only escape hatch): `withdrawUser` es la ruta user-facing, `withdraw` queda como admin-only.
+
+**Fee absorption (~1.5% USDT-on-Celo).** El token USDT de Celo (`0x48065f…`) tiene un fee de transferencia embebido del ~1.5% (community fund). Decisión confirmada: **HexArena absorbe el fee** — el server manda `amountRaw = amountUSD / 0.985` al contrato, el usuario recibe ~`amountUSD` neto, la diferencia la paga el operador. `CASHOUT_FEE_DIVISOR = 0.985` vive en `apps/server/ledger/ledger.ts` y se reusa en `apps/server/chain/withdraw.ts` para que nunca se desincronicen.
+
+**Idempotencia.** Cliente genera `Idempotency-Key` (uuid v4) por intento, lo guarda en localStorage con namespace `hexarena.cashout.idempotency.<wallet>.<amount>.<attempt>`. Retry con misma key → server devuelve estado actual sin re-broadcast. Try-again con key nueva → ejecución nueva (apropiado para fallas terminales donde ya se hizo la reversal). Mapeo `(userId, idempotencyKey) → withdrawal` persistido en tabla `withdrawals` de SQLite con índice único.
+
+**Orden de operaciones para atomicidad.** Patrón debit-first:
+
+1. `cashoutInitiate` debita el balance (escribe `WITHDRAW` entry con `delta = -amountUSD`). Si falla por saldo insuficiente, rechaza con `INSUFFICIENT_BALANCE`.
+2. Server firma `withdrawUser(keccak256(withdrawalId), wallet, amountRaw)` vía `OPERATOR_PRIVATE_KEY`.
+3. Si la tx confirma → `cashoutConfirm(withdrawalId, txHash, amountRaw)`.
+4. Si la tx revierte → `cashoutFail(withdrawalId)` escribe `WITHDRAW_REVERSAL` con `delta = +amountUSD`, restaurando el balance.
+
+El client **nunca firma la tx de cashout** (a diferencia de deposit). El operador firma con `OPERATOR_PRIVATE_KEY` porque el float está en el contrato, no en una wallet EOA externa.
+
+**Pruebas en producción.** Verificado end-to-end el 2026-07-06: deposit → cashout $0.10 → tx firmada por el server → USDT llega a MiniPay wallet (neto ≈ $0.0965 después del fee absorption). Idempotencia confirmada: replay del POST con misma key no genera segunda tx. Reversión probada: reverts on-chain dejan el balance interno restaurado.
+
+**Archivos clave:**
+
+- Contrato: `packages/contracts/src/ArenaSettlement.sol` (`withdrawUser`, `withdrawn`, `UserWithdrawn`, `AlreadyWithdrawn`), `packages/contracts/script/DeployArenaSettlementV2.s.sol`
+- Shared: `packages/shared/chain/index.ts` (`withdrawUser` ABI + address actualizado)
+- Server: `apps/server/cashoutEndpoint.ts`, `apps/server/chain/withdraw.ts`, `apps/server/ledger/ledger.ts` (`cashoutInitiate/Confirm/Fail`), `apps/server/ledger/types.ts` (`Withdrawal`, `LedgerEntryKind += WITHDRAW/WITHDRAW_REVERSAL`), `apps/server/server.ts` (wiring), `apps/server/indexEnv.ts` (validación `OPERATOR_PRIVATE_KEY` al boot), `apps/server/cors.ts` (`idempotency-key` en `Access-Control-Allow-Headers`)
+- Web: `apps/web/lib/cashout.ts`, `apps/web/lib/cashoutIdempotency.ts`, `apps/web/components/CashoutDialog.tsx`, `apps/web/app/page.tsx` (botón "Cash out" reemplaza el alert)
+- Tests: `forge` 21/21, server 110/110, web 165/166 (1 flake pre-existente en `matchmaking/page.test.tsx` documentada)
+
+**Deploy manual requerido (no automatizado).** El contrato v2 se deployó con `forge script --broadcast --verify` desde foundry local (guía de instalación en el contexto de la sesión). El float inicial ($1 USDT) se fondeó con `cast send fund(uint256)`. **Cualquier redeploy futuro del contrato repite los pasos manuales** — no hay pipeline automatizado porque las private keys de treasury/operator no viven en el repo.
+
+**Pendiente / known issue.** El owner key actual es la misma dirección que operator y treasury (`0x34d5d015…`). El NatSpec del contrato recomienda separarlas (owner admin seguro ≠ operator signer caliente). Funcional pero NO es la configuración ideal — mover el owner a una key separada es technical debt para una sesión futura.
+
 ### Reglas de tiempo: reloj compartido de partida (2026-07-04, `shared-match-timer`)
 
 Reemplazado el reloj sudden-death por jugador por un **reloj único de partida** (piso 3 minutos) que corre en tiempo real sin pausar por turno. Al llegar a 0, el match termina y se puntúa **igual que un final normal de tablero** (gana quien tenga más piezas; empate en piezas = draw) — ya no pierde automáticamente quien se quedó sin tiempo. El tablero ahora muestra el conteo de piezas capturadas en vivo por jugador.
