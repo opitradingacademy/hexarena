@@ -40,3 +40,33 @@ export function validateTreasuryAddress(value: string): `0x${string}` {
   }
   return value.toLowerCase() as `0x${string}`;
 }
+
+/**
+ * Boot-time check for OPERATOR_PRIVATE_KEY. The cash-out feature (PR1)
+ * needs a real signer; the previous settle() flow also used this key
+ * but failed open at boot. We now fail loud at boot if it's missing,
+ * mirroring the treasury-address validation above. The cashout
+ * endpoint additionally reads `process.env.OPERATOR_PRIVATE_KEY` at
+ * request time and returns CONFIG_ERROR if it disappears between
+ * boot and runtime — defense in depth.
+ *
+ * Format: 0x + 64 hex chars (32-byte secp256k1 private key).
+ */
+const PRIVATE_KEY_RE = /^0x[0-9a-fA-F]{64}$/;
+
+export function validateOperatorPrivateKey(value: string | undefined): `0x${string}` {
+  if (!value) {
+    throw new Error(
+      "OPERATOR_PRIVATE_KEY is empty. Set the env to the 32-byte " +
+        "operator signing key (0x + 64 hex chars). Without it, /api/cashout " +
+        "and the on-chain settle() path cannot sign transactions.",
+    );
+  }
+  if (!PRIVATE_KEY_RE.test(value)) {
+    throw new Error(
+      `OPERATOR_PRIVATE_KEY has wrong shape (length=${value.length}). ` +
+        "Expected 0x + 64 hex chars (32-byte secp256k1 key).",
+    );
+  }
+  return value as `0x${string}`;
+}

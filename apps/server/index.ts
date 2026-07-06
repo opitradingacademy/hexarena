@@ -7,7 +7,8 @@ import { SETTLEMENT_TOKEN_ADDRESS } from "@hexarena/shared/chain";
 import { createServer } from "./server";
 import { MemoryLedgerStore } from "./ledger/memoryStore";
 import { SqliteLedgerStore } from "./ledger/sqliteStore";
-import { validateTreasuryAddress } from "./indexEnv";
+import { validateTreasuryAddress, validateOperatorPrivateKey } from "./indexEnv";
+import { withdrawUsdtOnChain } from "./chain/withdraw";
 
 const httpServer = createHttpServer();
 
@@ -93,6 +94,11 @@ const fornoClient = createPublicClient({
 // for hours.
 const treasuryAddress = validateTreasuryAddress(process.env.ARENA_TREASURY_ADDRESS ?? "");
 
+// PR1: same fail-loud posture for the operator signing key (used by
+// both settle() and withdrawUser()). Without this key the cash-out
+// endpoint can't sign anything — fail at boot, not at request time.
+validateOperatorPrivateKey(process.env.OPERATOR_PRIVATE_KEY);
+
 const tokenAddress = SETTLEMENT_TOKEN_ADDRESS[42220];
 if (!tokenAddress) {
   throw new Error("No settlement token configured for chain 42220 (Celo Mainnet)");
@@ -104,6 +110,7 @@ createServer(httpServer, store, {
   publicClient,
   extraPublicClients: [fornoClient],
   corsOrigin: process.env.ARENA_CORS_ORIGIN ?? "https://web-taupe-alpha-23.vercel.app",
+  withdrawFn: withdrawUsdtOnChain,
 });
 
 const port = Number(process.env.PORT ?? 3001);

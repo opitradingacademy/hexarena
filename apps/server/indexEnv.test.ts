@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateTreasuryAddress } from "./indexEnv";
+import { validateTreasuryAddress, validateOperatorPrivateKey } from "./indexEnv";
 
 describe("validateTreasuryAddress", () => {
   it("accepts a 40-hex-char (20-byte) address", () => {
@@ -37,5 +37,33 @@ describe("validateTreasuryAddress", () => {
 
   it("rejects an empty string", () => {
     expect(() => validateTreasuryAddress("")).toThrow(/empty/);
+  });
+});
+
+describe("validateOperatorPrivateKey", () => {
+  it("accepts a 0x + 64-hex-char (32-byte) private key", () => {
+    const key = "0x" + "a".repeat(64);
+    expect(validateOperatorPrivateKey(key)).toBe(key);
+  });
+
+  it("rejects an empty string", () => {
+    expect(() => validateOperatorPrivateKey("")).toThrow(/empty/);
+    expect(() => validateOperatorPrivateKey(undefined)).toThrow(/empty/);
+  });
+
+  it("rejects a key that's too short", () => {
+    expect(() => validateOperatorPrivateKey("0xabc")).toThrow(/wrong shape/);
+  });
+
+  it("rejects a key that's too long", () => {
+    expect(() => validateOperatorPrivateKey("0x" + "a".repeat(128))).toThrow(/wrong shape/);
+  });
+
+  it("rejects a key without 0x prefix", () => {
+    expect(() => validateOperatorPrivateKey("a".repeat(64))).toThrow(/wrong shape/);
+  });
+
+  it("rejects a key with non-hex characters", () => {
+    expect(() => validateOperatorPrivateKey("0xZZZZ" + "a".repeat(60))).toThrow(/wrong shape/);
   });
 });

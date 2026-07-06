@@ -9,6 +9,7 @@ describe("applyCorsHeaders", () => {
     expect(headers["Access-Control-Allow-Methods"]).toMatch(/POST/);
     expect(headers["Access-Control-Allow-Headers"]).toMatch(/content-type/);
     expect(headers["Access-Control-Allow-Headers"]).toMatch(/x-wallet-address/);
+    expect(headers["Access-Control-Allow-Headers"]).toMatch(/idempotency-key/);
   });
 
   it("echoes the request origin when explicitly allowed", () => {

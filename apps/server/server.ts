@@ -8,7 +8,11 @@ import type { Server as HttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { createPublicClient, http, isAddress, getAddress, type PublicClient } from "viem";
 import { celo } from "viem/chains";
-import type { ClientToServerEvents, GameMode, ServerToClientEvents } from "@hexarena/shared/protocol";
+import type {
+  ClientToServerEvents,
+  GameMode,
+  ServerToClientEvents,
+} from "@hexarena/shared/protocol";
 import { serializeGameState, type PlayerId } from "@hexarena/shared/domain/board";
 import { BOT_USER_ID } from "@hexarena/shared/domain/bot";
 import type { LedgerStore, UserId } from "./ledger/types";
@@ -16,6 +20,7 @@ import { balanceOf } from "./ledger/ledger";
 import { Matchmaker, type QueueEntry } from "./matchmaking";
 import { MatchSession } from "./matchSession";
 import { handleDepositRequest } from "./depositEndpoint";
+import { handleCashoutRequest, type WithdrawOnChainConfig } from "./cashoutEndpoint";
 import type { VerifyDepositProvider, MinimalReceipt } from "./chain/verifyDeposit";
 import { applyCorsHeaders } from "./cors";
 
@@ -63,6 +68,14 @@ export type CreateServerOpts = {
   corsOrigin?: string | "*";
   /** Injectable for tests; defaults to BOT_FALLBACK_MS (10s). */
   botFallbackMs?: number;
+  /**
+   * Injected cash-out chain adapter. Production wires this to the real
+   * `withdrawUsdtOnChain` from `apps/server/chain/withdraw.ts`. Tests
+   * pass a mock. When omitted, /api/cashout returns 503 NO_RPC (or
+   * CONFIG_ERROR if OPERATOR_PRIVATE_KEY is missing) — same pattern
+   * as the deposit endpoint.
+   */
+  withdrawFn?: WithdrawOnChainConfig["withdrawFn"];
 };
 
 export function createServer(
@@ -180,6 +193,21 @@ export function createServer(
         },
         settleTokenDecimals: 6,
       });
+      return;
+    }
+
+    // POST /api/cashout — debit ledger and broadcast withdrawUser on
+    // ArenaSettlement. Mirrors the deposit wiring: when createServer
+    // is called without a withdrawFn, /api/cashout fails fast with a
+    // clear code (NO_WITHDRAW_FN for missing adapter, CONFIG_ERROR
+    // for missing OPERATOR_PRIVATE_KEY).
+    if (url.pathname === "/api/cashout") {
+      if (!opts.withdrawFn) {
+        res.writeHead(503, { "Content-Type": "application/json", ...corsHeaders });
+        res.end(JSON.stringify({ ok: false, code: "NO_WITHDRAW_FN" }));
+        return;
+      }
+      await handleCashoutRequest(req, res, store, { withdrawFn: opts.withdrawFn });
       return;
     }
 
@@ -349,7 +377,12 @@ export function createServer(
       }
       const code = randomUUID().slice(0, 8);
       const expiresAt = Date.now() + INVITE_TTL_MS;
-      invites.set(code, { inviterUserId: userId, mode: payload.mode, stake: payload.stake ?? 0, expiresAt });
+      invites.set(code, {
+        inviterUserId: userId,
+        mode: payload.mode,
+        stake: payload.stake ?? 0,
+        expiresAt,
+      });
       socket.emit("invite_created", { code, expiresAt });
     });
 
