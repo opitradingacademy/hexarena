@@ -86,11 +86,7 @@ export type MoveResultPayload = {
 };
 
 export type MoveRejectedReason =
-  | "wrong-turn"
-  | "occupied"
-  | "out-of-bounds"
-  | "no-capture"
-  | "game-over";
+  "wrong-turn" | "occupied" | "out-of-bounds" | "no-capture" | "game-over";
 
 export type MoveRejectedPayload = {
   reason: MoveRejectedReason;
@@ -119,7 +115,8 @@ export type ArenaSettlementInfo = {
   settleTxPending: boolean;
 };
 
-export type GameOverReason = "majority" | "draw" | "timeout" | "resign" | "abandon" | "turn-timeout";
+export type GameOverReason =
+  "majority" | "draw" | "timeout" | "resign" | "abandon" | "turn-timeout";
 
 export type GameOverPayload = {
   winner: PlayerId | null;
@@ -135,6 +132,27 @@ export type ErrorPayload = {
   msg: string;
 };
 
+/**
+ * Server-to-client reconnection snapshot — sent in response to `resume`
+ * (also fired for late subscribers once on join). Reconstruct with
+ * `deserializeGameState` from `@hexarena/shared/domain/board`.
+ *
+ * The bug this fixes: when a player briefly disconnects mid-match
+ * (MiniPay background, screen lock, WebView suspend) and reconnects,
+ * the client's `useState(createGame())` initial state diverges from
+ * the server's. The client then sends moves the server has already
+ * rejected, and the user has no idea why clicks "don't work".
+ */
+export type MatchSnapshotPayload = {
+  matchId: MatchId;
+  /** JSON-safe wire form — reconstruct with `deserializeGameState` from `@hexarena/shared/domain/board`. */
+  state: SerializedGameState;
+  /** Present only if the match ended while the client was disconnected. */
+  gameOver?: GameOverPayload;
+  /** Single shared match clock (ms remaining). */
+  matchClockMs: number;
+};
+
 export type ServerToClientEvents = {
   queue_joined: (payload: QueueJoinedPayload) => void;
   match_found: (payload: MatchFoundPayload) => void;
@@ -145,6 +163,7 @@ export type ServerToClientEvents = {
   opponent_reconnected: (payload: OpponentReconnectedPayload) => void;
   invite_created: (payload: InviteCreatedPayload) => void;
   game_over: (payload: GameOverPayload) => void;
+  match_state_snapshot: (payload: MatchSnapshotPayload) => void;
   error: (payload: ErrorPayload) => void;
 };
 

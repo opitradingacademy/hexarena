@@ -428,7 +428,21 @@ export function createServer(
 
     socket.on("resume", ({ matchId }) => {
       socket.join(matchId);
-      sessions.get(matchId)?.resume(userId);
+      const session = sessions.get(matchId);
+      if (!session) {
+        // The session is gone — match was cleaned up, abandoned past
+        // grace, or never existed. Without an explicit signal the client
+        // would just sit on `useState(createGame())` and conclude the
+        // page is broken. Emit a NOT_FOUND error so it can navigate away.
+        socket.emit("error", { code: "NOT_FOUND", msg: "Match no longer exists" });
+        return;
+      }
+      session.resume(userId);
+      // Send the live state so the client hydrates from the same view
+      // the server has — without this, a player who briefly disconnected
+      // (MiniPay background, screen lock) returns to an empty board,
+      // clicks a cell, and gets rejected with no visible feedback.
+      socket.emit("match_state_snapshot", session.snapshot());
     });
 
     socket.on("disconnect", () => {

@@ -22,6 +22,7 @@ import {
   type GameMode,
   type GameOverPayload,
   type GameOverReason,
+  type MatchSnapshotPayload,
   type MoveResultPayload,
   type MoveRejectedReason,
 } from "@hexarena/shared/protocol";
@@ -85,6 +86,12 @@ export class MatchSession {
   private clockInterval: ReturnType<typeof setInterval>;
   /** Total ms allotted for the shared match clock — fixed at match creation, used to recompute `matchClockMs` from `Date.now()` each tick (design D2, avoids `setInterval` drift). */
   private readonly totalMatchClockMs: number;
+  /**
+   * Set by `finalize()` so that a reconnecting client can see the result
+   * even if their `match_state_snapshot` arrives after `game_over`. Empty
+   * while the match is in progress.
+   */
+  private lastGameOverPayload: GameOverPayload | null = null;
   private finished = false;
 
   constructor(deps: MatchSessionDeps) {
@@ -247,6 +254,26 @@ export class MatchSession {
     return true;
   }
 
+  /**
+   * Read-only view of the current match state, intended for the
+   * `match_state_snapshot` server-to-client event sent on reconnect.
+   *
+   * If the match ended while the client was disconnected, `gameOver` is
+   * populated so the client can render the ResultBanner without waiting
+   * for the `game_over` broadcast (which they may have already missed).
+   *
+   * Pure read — no side effects, no emit. The I/O wiring lives in
+   * `server.ts`'s `socket.on("resume", ...)` handler.
+   */
+  snapshot(): MatchSnapshotPayload {
+    return {
+      matchId: this.matchId,
+      state: serializeGameState(this.state),
+      matchClockMs: this.state.matchClockMs,
+      ...(this.lastGameOverPayload ? { gameOver: this.lastGameOverPayload } : {}),
+    };
+  }
+
   private finalize(reason: GameOverReason, winner: PlayerId | null): void {
     if (this.finished) return;
     this.finished = true;
@@ -257,12 +284,23 @@ export class MatchSession {
     }
 
     const payload: GameOverPayload = { winner, reason };
+    // Remember the final result so reconnecting clients (e.g. after a
+    // brief MiniPay background → WebView suspend) get the result via
+    // `match_state_snapshot` instead of seeing an empty board.
+    this.lastGameOverPayload = payload;
 
     if (this.mode === "ARENA") {
       if (winner) {
         const winnerId = this.players[winner];
         const loserId = this.players[otherPlayer(winner)];
-        const { payout } = settleDecisive(this.store, this.matchId, winnerId, loserId, this.stake, this.stake);
+        const { payout } = settleDecisive(
+          this.store,
+          this.matchId,
+          winnerId,
+          loserId,
+          this.stake,
+          this.stake,
+        );
         payload.arena = { prizeUSD: payout, settleTxPending: true };
         // Fire-and-forget: game_over must not block on chain confirmation
         // (spec "Arena game over pending settlement").
@@ -275,7 +313,14 @@ export class MatchSession {
           console.error(`[settleOnChain] matchId=${this.matchId} failed:`, err);
         });
       } else {
-        settleDraw(this.store, this.matchId, this.players.P1, this.players.P2, this.stake, this.stake);
+        settleDraw(
+          this.store,
+          this.matchId,
+          this.players.P1,
+          this.players.P2,
+          this.stake,
+          this.stake,
+        );
         payload.arena = { prizeUSD: this.stake * 0.8, settleTxPending: false };
       }
     }
