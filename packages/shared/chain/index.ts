@@ -12,12 +12,11 @@ export type ChainId = 42220 | 11142220;
 export type VerifiedAsset = "USDm" | "USDC" | "USDT";
 
 export const ARENA_SETTLEMENT_ADDRESS: Partial<Record<ChainId, `0x${string}`>> = {
-  // NOTE: This address WILL CHANGE after the "Cash out" feature (PR1 of the
-  // cash-out change) redeploys ArenaSettlement with the new `withdrawUser`
-  // function. PR0 ships the contract code + ABI fragment only — the address
-  // update is intentionally deferred to PR1 (post-deploy) to avoid a window
-  // where the web app points at a contract that doesn't exist yet on Mainnet.
-  42220: "0x108E012C3B12421f216cA5C2C59770c34653e1d0",
+  // Cash-out (PR1): the contract was redeployed with the new `withdrawUser`
+  // function. Both the new `withdrawUser` and the existing `settle` are
+  // served from this single contract — apps/server routes user cash-outs
+  // through `withdrawUser` and Arena match payouts through `settle`.
+  42220: "0x4da63741993F0C5B85148C412bc890ff0659AB3A",
 };
 
 /** Settlement token (USDT) on Celo Mainnet — matches ArenaSettlement's constructor arg. */
@@ -44,8 +43,7 @@ export const FEE_CURRENCY_ADAPTER: Partial<Record<ChainId, `0x${string}`>> = {
  *   - `settle`         — operator pays the Arena match winner.
  *   - `withdrawUser`   — operator releases user cash-outs (idempotent per
  *                        `withdrawalId`). Added in PR0 of the cash-out
- *                        change; the on-chain address is unchanged in this
- *                        PR but WILL be redeployed in PR1.
+ *                        change; PR1 wires apps/server to call it.
  */
 export const ARENA_SETTLEMENT_ABI = [
   {
