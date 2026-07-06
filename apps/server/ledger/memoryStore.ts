@@ -7,6 +7,7 @@ import type {
   MatchId,
   User,
   UserId,
+  Withdrawal,
 } from "./types";
 
 /**
@@ -20,6 +21,9 @@ export class MemoryLedgerStore implements LedgerStore {
   private deposits: Deposit[] = [];
   private entries: LedgerEntry[] = [];
   private matches = new Map<MatchId, Match>();
+  private withdrawals = new Map<string, Withdrawal>();
+  /** Idempotency-key index per user — kept in sync inside withTransaction. */
+  private withdrawalKeyIndex = new Map<UserId, Map<string, string>>();
 
   getUser(id: UserId): User | undefined {
     return this.users.get(id);
@@ -47,9 +51,7 @@ export class MemoryLedgerStore implements LedgerStore {
   }
 
   balanceOf(userId: UserId): number {
-    return this.entries
-      .filter((e) => e.userId === userId)
-      .reduce((sum, e) => sum + e.delta, 0);
+    return this.entries.filter((e) => e.userId === userId).reduce((sum, e) => sum + e.delta, 0);
   }
 
   appendEntry(e: Omit<LedgerEntry, "id" | "createdAt">): LedgerEntry {
@@ -93,14 +95,57 @@ export class MemoryLedgerStore implements LedgerStore {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
+  // ---- Cash-out (PR1) ----
+
+  createWithdrawal(w: Omit<Withdrawal, "createdAt">): Withdrawal {
+    // Idempotency: same (userId, key) → return the existing row. Lets
+    // clients safely retry the same cash-out without paying twice.
+    const existing = this.getWithdrawalByIdempotencyKey(w.userId, w.idempotencyKey);
+    if (existing) return existing;
+    const withdrawal: Withdrawal = { ...w, createdAt: Date.now() };
+    this.withdrawals.set(withdrawal.id, withdrawal);
+    let perUser = this.withdrawalKeyIndex.get(withdrawal.userId);
+    if (!perUser) {
+      perUser = new Map();
+      this.withdrawalKeyIndex.set(withdrawal.userId, perUser);
+    }
+    perUser.set(withdrawal.idempotencyKey, withdrawal.id);
+    return withdrawal;
+  }
+
+  getWithdrawal(id: string): Withdrawal | undefined {
+    return this.withdrawals.get(id);
+  }
+
+  getWithdrawalByIdempotencyKey(userId: UserId, key: string): Withdrawal | undefined {
+    const perUser = this.withdrawalKeyIndex.get(userId);
+    const id = perUser?.get(key);
+    if (!id) return undefined;
+    return this.withdrawals.get(id);
+  }
+
+  updateWithdrawal(id: string, patch: Partial<Withdrawal>): Withdrawal {
+    const existing = this.withdrawals.get(id);
+    if (!existing) throw new Error(`withdrawal not found: ${id}`);
+    const updated: Withdrawal = { ...existing, ...patch };
+    this.withdrawals.set(id, updated);
+    return updated;
+  }
+
   withTransaction<T>(fn: () => T): T {
     const entriesSnapshot = [...this.entries];
     const matchesSnapshot = new Map(this.matches);
+    const withdrawalsSnapshot = new Map(this.withdrawals);
+    const keyIndexSnapshot = new Map(
+      Array.from(this.withdrawalKeyIndex.entries()).map(([k, v]) => [k, new Map(v)]),
+    );
     try {
       return fn();
     } catch (err) {
       this.entries = entriesSnapshot;
       this.matches = matchesSnapshot;
+      this.withdrawals = withdrawalsSnapshot;
+      this.withdrawalKeyIndex = keyIndexSnapshot;
       throw err;
     }
   }

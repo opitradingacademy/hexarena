@@ -166,6 +166,108 @@ describe("SqliteLedgerStore", () => {
       cleanup(store);
     }
   });
+
+  describe("Withdrawals (PR1)", () => {
+    const W_ID = "11111111-2222-4333-8444-555555555555";
+    const W_IDEM = "idem-abc-123";
+
+    function makePending(): {
+      id: string;
+      userId: string;
+      amountUSD: number;
+      amountRaw: number | null;
+      txHash: string | null;
+      status: "PENDING" | "CONFIRMED" | "FAILED";
+      idempotencyKey: string;
+      confirmedAt: number | null;
+      failedAt: number | null;
+    } {
+      return {
+        id: W_ID,
+        userId: SENDER,
+        amountUSD: 0.1,
+        amountRaw: null,
+        txHash: null,
+        status: "PENDING",
+        idempotencyKey: W_IDEM,
+        confirmedAt: null,
+        failedAt: null,
+      };
+    }
+
+    it("createWithdrawal inserts a row and getWithdrawal retrieves it", () => {
+      const store = new SqliteLedgerStore(dbPath);
+      try {
+        store.upsertUser(SENDER, SENDER);
+        const created = store.createWithdrawal(makePending());
+        expect(created.id).toBe(W_ID);
+        expect(created.status).toBe("PENDING");
+        expect(created.amountUSD).toBeCloseTo(0.1, 5);
+        const fetched = store.getWithdrawal(W_ID);
+        expect(fetched).toBeDefined();
+        expect(fetched?.idempotencyKey).toBe(W_IDEM);
+      } finally {
+        cleanup(store);
+      }
+    });
+
+    it("createWithdrawal is idempotent on (userId, idempotencyKey)", () => {
+      const store = new SqliteLedgerStore(dbPath);
+      try {
+        store.upsertUser(SENDER, SENDER);
+        const first = store.createWithdrawal(makePending());
+        const second = store.createWithdrawal(makePending());
+        // Same id + same key → return the existing row, no duplicate.
+        expect(second.id).toBe(first.id);
+        expect(second.createdAt).toBe(first.createdAt);
+        // Also exposed via the lookup-by-key API.
+        const byKey = store.getWithdrawalByIdempotencyKey(SENDER, W_IDEM);
+        expect(byKey?.id).toBe(W_ID);
+      } finally {
+        cleanup(store);
+      }
+    });
+
+    it("updateWithdrawal patches status, txHash, amountRaw, timestamps", () => {
+      const store = new SqliteLedgerStore(dbPath);
+      try {
+        store.upsertUser(SENDER, SENDER);
+        store.createWithdrawal(makePending());
+        const updated = store.updateWithdrawal(W_ID, {
+          status: "CONFIRMED",
+          txHash: "0xconfhash",
+          amountRaw: 0.101523,
+          confirmedAt: 1234567890,
+        });
+        expect(updated.status).toBe("CONFIRMED");
+        expect(updated.txHash).toBe("0xconfhash");
+        expect(updated.amountRaw).toBeCloseTo(0.101523, 6);
+        expect(updated.confirmedAt).toBe(1234567890);
+      } finally {
+        cleanup(store);
+      }
+    });
+
+    it("survives a restart — withdrawals persist to disk", () => {
+      const makeStore = () => new SqliteLedgerStore(dbPath);
+      const store1 = makeStore();
+      store1.upsertUser(SENDER, SENDER);
+      store1.createWithdrawal(makePending());
+      store1.close();
+
+      const store2 = makeStore();
+      try {
+        const fetched = store2.getWithdrawal(W_ID);
+        expect(fetched).toBeDefined();
+        expect(fetched?.id).toBe(W_ID);
+        expect(fetched?.status).toBe("PENDING");
+        const byKey = store2.getWithdrawalByIdempotencyKey(SENDER, W_IDEM);
+        expect(byKey?.id).toBe(W_ID);
+      } finally {
+        cleanup(store2);
+      }
+    });
+  });
 });
 
 // Sentinel unused-imports allow types we re-export indirectly.

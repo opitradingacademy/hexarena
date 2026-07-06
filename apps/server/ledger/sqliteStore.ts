@@ -9,6 +9,7 @@ import type {
   MatchId,
   User,
   UserId,
+  Withdrawal,
 } from "./types";
 
 /**
@@ -86,6 +87,27 @@ export class SqliteLedgerStore implements LedgerStore {
         ON matches (p1, createdAt);
       CREATE INDEX IF NOT EXISTS idx_matches_p2
         ON matches (p2, createdAt);
+
+      -- Cash-out requests (PR1). One row per (userId, idempotencyKey).
+      -- amountUSD is the user-facing debit; amountRaw is the gross
+      -- amount signed to the contract (operator absorbs the ~1.5% USDT
+      -- transfer fee). Status moves PENDING -> CONFIRMED | FAILED.
+      CREATE TABLE IF NOT EXISTS withdrawals (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        amountUSD REAL NOT NULL,
+        amountRaw REAL,
+        txHash TEXT,
+        status TEXT NOT NULL,
+        idempotencyKey TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        confirmedAt INTEGER,
+        failedAt INTEGER
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_withdrawals_idem
+        ON withdrawals (userId, idempotencyKey);
+      CREATE INDEX IF NOT EXISTS idx_withdrawals_user
+        ON withdrawals (userId, createdAt);
     `);
   }
 
@@ -252,6 +274,92 @@ export class SqliteLedgerStore implements LedgerStore {
           " FROM matches WHERE p1 = ? OR p2 = ? ORDER BY createdAt DESC",
       )
       .all(userId, userId) as Match[];
+  }
+
+  // ---- Cash-out (PR1) ----
+
+  /**
+   * Insert a withdrawal row. Idempotent on (userId, idempotencyKey) —
+   * if a row already exists for that pair, returns the existing one
+   * unchanged (lets clients safely retry the same cash-out). The
+   * unique index on (userId, idempotencyKey) backs this; on collision
+   * we look up and return instead of throwing.
+   */
+  createWithdrawal(w: Omit<Withdrawal, "createdAt">): Withdrawal {
+    const existing = this.getWithdrawalByIdempotencyKey(w.userId, w.idempotencyKey);
+    if (existing) return existing;
+    const withdrawal: Withdrawal = { ...w, createdAt: Date.now() };
+    try {
+      this.db
+        .prepare(
+          "INSERT INTO withdrawals (id, userId, amountUSD, amountRaw, txHash, status," +
+            " idempotencyKey, createdAt, confirmedAt, failedAt)" +
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          withdrawal.id,
+          withdrawal.userId,
+          withdrawal.amountUSD,
+          withdrawal.amountRaw,
+          withdrawal.txHash,
+          withdrawal.status,
+          withdrawal.idempotencyKey,
+          withdrawal.createdAt,
+          withdrawal.confirmedAt,
+          withdrawal.failedAt,
+        );
+    } catch (e) {
+      // The unique index makes this race-safe: two concurrent
+      // cash-outs with the same (userId, idempotencyKey) — second
+      // insert collides, fall back to the existing row.
+      const msg = (e as Error).message;
+      if (msg.includes("UNIQUE") || msg.includes("constraint")) {
+        const row = this.getWithdrawalByIdempotencyKey(w.userId, w.idempotencyKey);
+        if (row) return row;
+      }
+      throw e;
+    }
+    return withdrawal;
+  }
+
+  getWithdrawal(id: string): Withdrawal | undefined {
+    return this.db
+      .prepare(
+        "SELECT id, userId, amountUSD, amountRaw, txHash, status, idempotencyKey," +
+          " createdAt, confirmedAt, failedAt FROM withdrawals WHERE id = ?",
+      )
+      .get(id) as Withdrawal | undefined;
+  }
+
+  getWithdrawalByIdempotencyKey(userId: UserId, key: string): Withdrawal | undefined {
+    return this.db
+      .prepare(
+        "SELECT id, userId, amountUSD, amountRaw, txHash, status, idempotencyKey," +
+          " createdAt, confirmedAt, failedAt FROM withdrawals" +
+          " WHERE userId = ? AND idempotencyKey = ?",
+      )
+      .get(userId, key) as Withdrawal | undefined;
+  }
+
+  updateWithdrawal(id: string, patch: Partial<Withdrawal>): Withdrawal {
+    const existing = this.getWithdrawal(id);
+    if (!existing) throw new Error(`withdrawal not found: ${id}`);
+    const updated: Withdrawal = { ...existing, ...patch };
+    this.db
+      .prepare(
+        "UPDATE withdrawals SET amountUSD = ?, amountRaw = ?, txHash = ?," +
+          " status = ?, confirmedAt = ?, failedAt = ? WHERE id = ?",
+      )
+      .run(
+        updated.amountUSD,
+        updated.amountRaw,
+        updated.txHash,
+        updated.status,
+        updated.confirmedAt,
+        updated.failedAt,
+        id,
+      );
+    return updated;
   }
 
   /**

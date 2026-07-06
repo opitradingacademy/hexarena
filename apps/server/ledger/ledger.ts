@@ -2,11 +2,23 @@
  * Ledger business logic — invariants per arena-settlement spec.
  * Pure application logic over a `LedgerStore`; no Socket.IO, no chain calls.
  */
-import type { LedgerStore, MatchId, UserId } from "./types";
+import type { LedgerStore, MatchId, UserId, Withdrawal } from "./types";
 import { InsufficientBalanceError } from "./errors";
 
 /** House rake: 20% of total pool, per "House Rake on Payout" / "Draw Refund Minus House Rake". */
 export const HOUSE_RAKE = 0.2;
+
+/** Minimum allowed cash-out. Below this the handler rejects with BELOW_MINIMUM. */
+export const MIN_CASHOUT_USD = 0.1;
+
+/**
+ * USDT on Celo Mainnet charges ~1.5% on each transfer (community fund
+ * fee embedded in the token). The contract is called with the GROSS
+ * amount so the user nets close to amountUSD; the operator absorbs
+ * the delta. See apps/server/chain/withdraw.ts and the cash-out
+ * change design for the rationale.
+ */
+export const CASHOUT_FEE_DIVISOR = 0.985;
 
 export function balanceOf(store: LedgerStore, userId: UserId): number {
   return store.balanceOf(userId);
@@ -118,4 +130,101 @@ export function voidMatch(
       store.updateMatch(matchId, { state: "VOID", endedAt: Date.now() });
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Cash-out (PR1 of the cash-out change)
+//
+// Atomic order: debit FIRST, broadcast on-chain SECOND, confirm LAST.
+// If the tx reverts, the caller writes a WITHDRAW_REVERSAL entry via
+// cashoutFail() — never a partial write. The withdrawUser() contract
+// call is idempotent on `withdrawalId` (hashed to bytes32) so a
+// duplicate broadcast is safe.
+// ---------------------------------------------------------------------------
+
+/**
+ * Initiates a cashout. Debits the user's ledger by `amountUSD` (the
+ * user-facing number — NOT `amountRaw`, which is the gross signed
+ * amount on-chain). The balance invariant (never negative) is
+ * preserved by the inner check.
+ *
+ * Idempotent on the supplied `withdrawalId`: replaying the same call
+ * returns the existing row, no second debit.
+ */
+export function cashoutInitiate(
+  store: LedgerStore,
+  userId: UserId,
+  withdrawalId: string,
+  amountUSD: number,
+  idempotencyKey: string,
+): Withdrawal {
+  return store.withTransaction(() => {
+    const existing = store.getWithdrawal(withdrawalId);
+    if (existing) return existing;
+
+    const available = store.balanceOf(userId);
+    if (available < amountUSD) {
+      throw new InsufficientBalanceError(userId, amountUSD, available);
+    }
+
+    store.appendEntry({ userId, matchId: null, delta: -amountUSD, kind: "WITHDRAW" });
+    return store.createWithdrawal({
+      id: withdrawalId,
+      userId,
+      amountUSD,
+      amountRaw: null,
+      txHash: null,
+      status: "PENDING",
+      idempotencyKey,
+      confirmedAt: null,
+      failedAt: null,
+    });
+  });
+}
+
+/**
+ * Marks a previously-initiated withdrawal CONFIRMED. Does NOT touch
+ * the balance — the debit landed at initiate time and the on-chain
+ * delivery is the user's own. Records the gross `amountRaw` sent to
+ * the contract (operator absorbed the ~1.5% delta) for audit.
+ */
+export function cashoutConfirm(
+  store: LedgerStore,
+  withdrawalId: string,
+  txHash: string,
+  amountRaw: number,
+): Withdrawal {
+  return store.updateWithdrawal(withdrawalId, {
+    status: "CONFIRMED",
+    txHash,
+    amountRaw,
+    confirmedAt: Date.now(),
+  });
+}
+
+/**
+ * Reverses a failed PENDING withdrawal. Writes a WITHDRAW_REVERSAL
+ * ledger entry with delta = +amountUSD to restore the user's
+ * balance. Use this when the on-chain broadcast reverted (rejected
+ * by the contract, RPC error, etc.).
+ */
+export function cashoutFail(store: LedgerStore, withdrawalId: string): Withdrawal {
+  const w = store.getWithdrawal(withdrawalId);
+  if (!w) {
+    throw new Error(`cashoutFail: unknown withdrawal ${withdrawalId}`);
+  }
+  store.withTransaction(() => {
+    store.appendEntry({
+      userId: w.userId,
+      matchId: null,
+      delta: w.amountUSD,
+      kind: "WITHDRAW_REVERSAL",
+    });
+    store.updateWithdrawal(withdrawalId, {
+      status: "FAILED",
+      failedAt: Date.now(),
+    });
+  });
+  // Re-read so the caller sees the patched row.
+  return store.getWithdrawal(withdrawalId)!;
 }

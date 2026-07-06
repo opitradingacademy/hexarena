@@ -30,7 +30,35 @@ export type Deposit = {
   creditedAt: number;
 };
 
-export type LedgerEntryKind = "DEPOSIT" | "HOLD" | "RELEASE" | "PAYOUT" | "REFUND";
+export type LedgerEntryKind =
+  "DEPOSIT" | "HOLD" | "RELEASE" | "PAYOUT" | "REFUND" | "WITHDRAW" | "WITHDRAW_REVERSAL";
+
+/**
+ * Cash-out request record. `id` is a uuid v4 (also the `withdrawalId`
+ * sent to the contract, hashed to bytes32 by the chain adapter). The
+ * flow is: create PENDING (with ledger debited) → CONFIRMED (with txHash)
+ * → or FAILED (with WITHDRAW_REVERSAL ledger entry restoring balance).
+ */
+export type Withdrawal = {
+  id: string;
+  userId: UserId;
+  /** User-facing debit amount (the number the user typed in "Cash out $X"). */
+  amountUSD: number;
+  /**
+   * Gross amount sent to the on-chain contract (USDT raw, but tracked
+   * here as a number for audit logs). Operator absorbs the ~1.5% USDT
+   * transfer fee, so this is `amountUSD / 0.985`. Null when the tx
+   * never broadcast (e.g. PENDING that was never confirmed).
+   */
+  amountRaw: number | null;
+  txHash: string | null;
+  status: "PENDING" | "CONFIRMED" | "FAILED";
+  /** Client-supplied uuid v4 — second-level idempotency key. */
+  idempotencyKey: string;
+  createdAt: number;
+  confirmedAt: number | null;
+  failedAt: number | null;
+};
 
 export type LedgerEntry = {
   id: string;
@@ -69,10 +97,23 @@ export interface LedgerStore {
   entriesForMatch(matchId: MatchId): LedgerEntry[];
 
   getMatch(id: MatchId): Match | undefined;
-  insertMatch(m: Omit<Match, "createdAt" | "endedAt" | "settleTx"> & { settleTx?: string | null }): Match;
+  insertMatch(
+    m: Omit<Match, "createdAt" | "endedAt" | "settleTx"> & { settleTx?: string | null },
+  ): Match;
   updateMatch(id: MatchId, patch: Partial<Match>): Match;
   /** Reverse-chronological match history for a user — History screen (design.md Wireframe #4). */
   matchHistoryFor(userId: UserId): Match[];
+
+  // ---- Cash-out (PR1) ----
+
+  /** Create a new PENDING withdrawal row. Idempotent on (userId, idempotencyKey). */
+  createWithdrawal(w: Omit<Withdrawal, "createdAt">): Withdrawal;
+  /** Look up a withdrawal by its uuid v4 id. */
+  getWithdrawal(id: string): Withdrawal | undefined;
+  /** Look up a withdrawal by the client-supplied idempotency key (per user). */
+  getWithdrawalByIdempotencyKey(userId: UserId, key: string): Withdrawal | undefined;
+  /** Patch a withdrawal (status / txHash / amountRaw / timestamps). */
+  updateWithdrawal(id: string, patch: Partial<Withdrawal>): Withdrawal;
 
   /**
    * Runs `fn` as a single atomic unit. In-memory: snapshots ledger_entries
