@@ -12,6 +12,7 @@ import { getArenaTreasuryAddress, getDepositUrl } from "../lib/serverUrl";
 import { getWalletAddress } from "../lib/wallet";
 import { waitForEthereum } from "../lib/waitForEthereum";
 import { StakeConfirmDialog } from "../components/StakeConfirmDialog";
+import { CashoutDialog } from "../components/CashoutDialog";
 
 /**
  * Dashboard screen (design.md wireframe "1. Dashboard").
@@ -35,6 +36,14 @@ export default function DashboardPage() {
   const [step, setStep] = useState<"select" | "confirm">("select");
   const [senderAddress, setSenderAddress] = useState<`0x${string}` | null>(null);
 
+  // Cash-out step machine mirrors deposit: a "select" chip step and a
+  // "confirm" dialog step that calls CashoutDialog (PR2). The amount
+  // chips are intentionally identical to deposit so the user has a
+  // familiar mental model — same chips, opposite direction.
+  const [cashoutOpen, setCashoutOpen] = useState(false);
+  const [cashoutStep, setCashoutStep] = useState<"select" | "confirm">("select");
+  const [cashoutAmount, setCashoutAmount] = useState<number | null>(null);
+
   // Resolve sender wallet address dynamically when the deposit flow starts
   useEffect(() => {
     if (!depositOpen) return;
@@ -51,12 +60,67 @@ export default function DashboardPage() {
     };
   }, [depositOpen]);
 
+  // Resolve the user's wallet address when the cash-out flow opens —
+  // required by the X-Wallet-Address header on POST /api/cashout.
+  // (Reuses the same resolver path as deposit; the wallet is the
+  // same in either direction.)
+  const [cashoutWallet, setCashoutWallet] = useState<`0x${string}` | null>(null);
+  useEffect(() => {
+    if (!cashoutOpen) return;
+    let cancelled = false;
+    (async () => {
+      await waitForEthereum();
+      if (cancelled) return;
+      const ethereum = window.ethereum as Parameters<typeof getWalletAddress>[0] | undefined;
+      const addr = await getWalletAddress(ethereum, { retries: 6, delayMs: 500 });
+      if (!cancelled && addr) setCashoutWallet(addr as `0x${string}`);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cashoutOpen]);
+
   async function handleDepositSuccess() {
     setDepositOpen(false);
     setSelectedAmount(null);
     setStep("select");
     // Trigger refreshing both server ledger and on-chain wallet balance
     await Promise.all([refreshGameBalance(), refreshWalletBalance()]);
+  }
+
+  async function handleCashoutSuccess() {
+    setCashoutOpen(false);
+    setCashoutStep("select");
+    setCashoutAmount(null);
+    // After a successful cash-out, the server ledger is debited and
+    // the user's wallet is credited — both balances changed, refresh
+    // both. Matches the deposit flow's pattern.
+    await Promise.all([refreshGameBalance(), refreshWalletBalance()]);
+  }
+
+  // Compute the chip list for the cash-out step-1 modal. Mirrors the
+  // deposit chips ($0.10, $0.25, $0.50, $1, $2) but only shows chips
+  // the user can actually afford. Adds an "All" chip when there's at
+  // least the minimum available — saves the user from typing
+  // custom amounts (the deposit flow doesn't have one either, by
+  // symmetry).
+  const cashoutChips: Array<{ label: string; amount: number; testId: string }> = [];
+  const presetAmounts = [0.1, 0.25, 0.5, 1.0, 2.0];
+  for (const amount of presetAmounts) {
+    if (amount <= gameBalance + 0.0001) {
+      cashoutChips.push({
+        label: formatUSD(amount),
+        amount,
+        testId: "cashout-chip",
+      });
+    }
+  }
+  if (gameBalance >= 0.1 && gameBalance > 2.0) {
+    cashoutChips.push({
+      label: `All (${formatUSD(gameBalance)})`,
+      amount: gameBalance,
+      testId: "cashout-chip-all",
+    });
   }
 
   return (
@@ -106,14 +170,15 @@ export default function DashboardPage() {
             </button>
             <button
               type="button"
+              data-testid="cashout-open"
               onClick={() => {
-                alert(
-                  "Withdrawals will be settled to your MiniPay wallet. Contact support for manual withdrawal of test funds.",
-                );
+                setCashoutOpen(true);
+                setCashoutStep("select");
               }}
-              className="rounded-xl border border-arena-border px-4 py-2 text-xs font-bold uppercase text-slate-300 transition hover:bg-slate-800"
+              disabled={gameBalance <= 0}
+              className="rounded-xl border border-arena-border px-4 py-2 text-xs font-bold uppercase text-slate-300 transition hover:bg-slate-800 disabled:opacity-40"
             >
-              Withdraw
+              Cash out
             </button>
           </div>
         </div>
@@ -196,6 +261,79 @@ export default function DashboardPage() {
             setStep("select");
           }}
           onSuccess={handleDepositSuccess}
+        />
+      )}
+
+      {/* Cash out Modal - Step 1: Select Amount */}
+      {cashoutOpen && cashoutStep === "select" && (
+        <div
+          role="dialog"
+          aria-modal
+          data-testid="cashout-step1"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-arena-border bg-arena-bg p-6 text-slate-200 shadow-neonGold">
+            <h2 className="text-lg font-black uppercase tracking-wider text-arena-gold">
+              Cash out
+            </h2>
+            <p className="mt-2 text-sm text-slate-300">
+              Select how much of your Game Balance you want to move to your MiniPay wallet:
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              {cashoutChips.map((chip) => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  data-testid={chip.testId}
+                  onClick={() => {
+                    setCashoutAmount(chip.amount);
+                    setCashoutStep("confirm");
+                  }}
+                  className="rounded-xl border border-arena-border bg-arena-surface py-3 text-sm font-bold transition hover:border-arena-gold text-white hover:bg-slate-800"
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+            {gameBalance > 0 && gameBalance < 0.1 && (
+              <p data-testid="cashout-below-min" className="mt-3 text-xs text-arena-gold">
+                Minimum cash out is $0.10. You currently have {formatUSD(gameBalance)}.
+              </p>
+            )}
+            {gameBalance === 0 && (
+              <p data-testid="cashout-empty" className="mt-3 text-xs text-slate-400">
+                No Game Balance to cash out.
+              </p>
+            )}
+            <button
+              type="button"
+              data-testid="cashout-step1-cancel"
+              onClick={() => {
+                setCashoutOpen(false);
+                setCashoutStep("select");
+                setCashoutAmount(null);
+              }}
+              className="mt-6 w-full rounded-xl border border-arena-border py-2.5 text-xs font-bold uppercase text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Cash out Modal - Step 2: Confirm (server signs the on-chain tx) */}
+      {cashoutOpen && cashoutStep === "confirm" && cashoutAmount !== null && cashoutWallet && (
+        <CashoutDialog
+          open={cashoutOpen && cashoutStep === "confirm"}
+          amountUSD={cashoutAmount}
+          wallet={cashoutWallet}
+          gameBalanceUSD={gameBalance}
+          onClose={() => {
+            setCashoutOpen(false);
+            setCashoutStep("select");
+            setCashoutAmount(null);
+          }}
+          onSuccess={handleCashoutSuccess}
         />
       )}
     </main>
