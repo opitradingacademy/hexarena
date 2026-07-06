@@ -24,6 +24,43 @@ Modo **"Play vs Computer"** en Casual: botón explícito (`play_vs_bot`) que arr
 
 `apps/web/components/HexBoard.tsx::computeBoardSize` tenía `centerY = (BOARD_RADIUS + 1) * hexSize` (mal, dejaba el board corrido hacia arriba) — corregido a `centerY = (1.5 * BOARD_RADIUS + 1) * hexSize`, acorde a la escala `1.5 * r` que usa `axialToPixel` para Y. Además el resize handler usaba `window.innerWidth` para dimensionar el board, pero el board vive dentro de un contenedor `max-w-md` — en desktop esto producía un board más ancho que su contenedor, cortado por el `overflow-hidden` del wrapper. Ahora se mide el `clientWidth` del propio wrapper vía `ResizeObserver` (con guard para jsdom, que no lo implementa). Deployado y confirmado por el usuario en producción. Detalle completo en Engram `ui/hex-board-y-centering-bug`.
 
+### Reconnect desync fix (game freeze al volver al match) — probado y funcionando en producción (2026-07-06)
+
+Bug reportado por usuario + reproducido por nosotros: salir de la app durante un match (incluso <1 segundo, en bot o humano) y volver producía un board "congelado" donde ningún click funcionaba. Síntoma engañoso — parecía que el juego estaba colgado.
+
+**Causa raíz** (no era lo que parecía inicialmente): no era el grace window de 30s expirando, era un **state desync**. Cuando el cliente se reconectaba:
+
+1. `useEffect` de `/game/[matchId]` corría con `useState(createGame())` (board inicial vacío, ignorando lo que el server ya tenía).
+2. El server seguía emitiendo `move_result` y `clock_tick` durante la ausencia — el cliente los perdía.
+3. Al volver, el board que veía el user no coincidía con el real del server.
+4. User clickeaba una celda → server respondía con `move_rejected` (reason: `wrong-turn`, `occupied`, o `no-capture`) porque el estado local estaba stale.
+5. **El cliente NO tenía listener para `move_rejected`** (`apps/web/app/game/[matchId]/page.tsx` solo escuchaba `move_result`, `clock_tick`, `game_over`). El rechazo era silenciosamente descartado → user concluía "el juego está congelado".
+
+**Fix en dos frentes**:
+
+**Server (commit `171251b`)** — nuevo evento `match_state_snapshot` que el server emite cada vez que un cliente llama `resume`:
+
+- `MatchSession.snapshot()` (público, read-only) devuelve el `SerializedGameState` actual + el `gameOver` payload si ya terminó + `matchClockMs`.
+- `MatchSession.lastGameOverPayload` se setea en `finalize()` para que el snapshot pueda traerlo cuando el match terminó durante la ausencia.
+- `resume` handler en `apps/server/server.ts` emite el snapshot al socket que se reconectó; si la sesión no existe (voided, GC'd), emite `error { code: "NOT_FOUND" }` en vez de quedarse mudo.
+
+**Cliente (commit `22fedf0`)** — `/game/[matchId]` ahora hidrata desde el snapshot y surface los rechazos:
+
+- Listener `match_state_snapshot` reemplaza el state local con el del server, y si trae `gameOver` muestra el `ResultBanner`.
+- Listener `move_rejected` ahora muestra un `MoveRejectedToast` no-bloqueante (`role="status"`, no `alert`) con mensaje humanizado por reason.
+- Toast se auto-dismiss a los 2.5s y se limpia también cuando llega un `move_result` exitoso o un `game_over` (no quedan errores stale colgados).
+
+**Verificación**: reproducción manual post-deploy → board muestra el estado real al volver (con piezas del bot ya jugadas), clicks en celdas ocupadas muestran el toast "That cell is already taken" en vez de no hacer nada.
+
+**Archivos clave:**
+
+- Protocol: `packages/shared/protocol/index.ts` (`MatchSnapshotPayload`, `match_state_snapshot` event).
+- Server: `apps/server/matchSession.ts` (`snapshot()`, `lastGameOverPayload`), `apps/server/server.ts` (handler `resume`).
+- Web: `apps/web/app/game/[matchId]/page.tsx` (listeners), `apps/web/components/MoveRejectedToast.tsx` (nuevo, ~30 líneas, reutilizable).
+- Tests: 3 unit + 2 e2e en server, 12 component en web. 320/320 pass (2 flakes pre-existentes en `matchmaking/page.test.tsx` documentadas).
+
+**Lección de protocolo**: cada vez que un cliente puede perderse eventos del server durante desconexiones, el server tiene que poder re-enviar el estado actual a demanda. El patrón "snapshot on lifecycle event" (resume, join, reconnect) es ahora una primitiva del protocolo. Tercera vez que aparece una necesidad similar esta semana (`invite_created`, `cashout` state, ahora `match_state_snapshot`) — vale la pena factorizar un helper genérico `emitSnapshot(targetSocket, session)` la próxima vez.
+
 ### Cash out (game balance → USDT on-chain) — probado y funcionando en producción (2026-07-06)
 
 Cierra el loop de Arena: antes los payouts (PAYOUT en el ledger interno) acreditaban Game Balance pero el USDT nunca salía del contrato a la wallet del user. Ahora el botón **"Cash out"** en el Dashboard mueve ese balance interno a USDT real en la MiniPay wallet. Naming elegido por el usuario ("Cash out" en vez de "Withdraw") por claridad para usuarios emergentes — copy rules respetadas: sin "Gas"/"Crypto"/"Onramp", todo en USD/USDT, addresses truncadas `0x1234…5678`.
