@@ -46,35 +46,59 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 ///      accept `(matchId, winner, totalPool)` and compute
 ///      `amount = totalPool * 80 / 100` here instead.
 ///
-/// @dev Access control: `settle()` is `onlyOperator` — a SINGLE backend
-///      signer for MVP (documented operator-trust risk in design.md D1: the
-///      operator can settle arbitrarily; v2 should move to a multisig or
-///      timelock-controlled operator). Admin functions (`fund`, `withdraw`,
-///      `pause`, `unpause`, `setOperator`) are `onlyOwner`.
+/// @dev Access control: `settle()` and `withdrawUser()` are `onlyOperator`
+///      — a SINGLE backend signer for MVP (documented operator-trust risk
+///      in design.md D1: the operator can settle/withdraw arbitrarily; v2
+///      should move to a multisig or timelock-controlled operator). Admin
+///      functions (`fund`, `withdraw`, `pause`, `unpause`, `setOperator`)
+///      are `onlyOwner`.
 ///
-/// @dev Idempotency: `settled[matchId]` is set to `true` BEFORE the token
-///      transfer (checks-effects-interactions), combined with
-///      `nonReentrant`, so a reentrant or duplicate `settle()` call for the
-///      same `matchId` always reverts and no double-payout is possible.
+/// @dev Two withdraw paths:
+///      - `withdraw(to, amount)` — owner-only admin escape hatch for
+///        rebalancing or emergencies (see design.md D1). Never used for
+///        user-facing cash-outs.
+///      - `withdrawUser(withdrawalId, to, amount)` — operator-driven user
+///        cash-out path. Each `withdrawalId` is single-use
+///        (`withdrawn[withdrawalId]` is the idempotency guard), so the
+///        backend can safely retry on network failure without double-paying.
+///        All on-chain Arena activity (settle + user withdraw) lives in
+///        THIS single contract — that's a deliberate scope choice for
+///        talent.app Proof of Ship registration (one contract to track,
+///        not two).
+///
+/// @dev Idempotency: both `settled[matchId]` and `withdrawn[withdrawalId]`
+///      are set to `true` BEFORE the token transfer
+///      (checks-effects-interactions), combined with `nonReentrant`, so a
+///      reentrant or duplicate call for the same key always reverts and no
+///      double-payout is possible.
 contract ArenaSettlement is Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    /// @notice ERC-20 token used to fund and pay out Arena match prizes.
+    /// @notice ERC-20 token used to fund and pay out Arena match prizes
+    ///         (and, by extension, user cash-outs — same float, same asset).
     IERC20 public immutable token;
 
-    /// @notice Single backend signer authorized to call settle().
+    /// @notice Single backend signer authorized to call settle() and
+    ///         withdrawUser().
     address public operator;
 
-    /// @notice matchId => already settled. Prevents double-payout.
+    /// @notice matchId => already settled. Prevents double-payout on
+    ///         match-resolution.
     mapping(bytes32 => bool) public settled;
+
+    /// @notice withdrawalId => already withdrawn. Prevents double-payout
+    ///         on user cash-outs (backend retries are safe).
+    mapping(bytes32 => bool) public withdrawn;
 
     event OperatorUpdated(address indexed previousOperator, address indexed newOperator);
     event Funded(address indexed from, uint256 amount);
     event Withdrawn(address indexed to, uint256 amount);
+    event UserWithdrawn(bytes32 indexed withdrawalId, address indexed to, uint256 amount);
     event Settled(bytes32 indexed matchId, address indexed winner, uint256 amount);
 
     error NotOperator();
     error AlreadySettled(bytes32 matchId);
+    error AlreadyWithdrawn(bytes32 withdrawalId);
     error ZeroAddress();
     error ZeroAmount();
     error InsufficientFloat(uint256 requested, uint256 available);
@@ -114,8 +138,13 @@ contract ArenaSettlement is Ownable, Pausable, ReentrancyGuard {
         emit Funded(msg.sender, amount);
     }
 
-    /// @notice Owner-only escape hatch to withdraw undistributed float funds,
-    ///         e.g. to rebalance or in an emergency. See design.md D1.
+    /// @notice Owner-only admin escape hatch to withdraw undistributed float
+    ///         funds, e.g. to rebalance or in an emergency. See design.md D1.
+    /// @dev NOT the user cash-out path — that is `withdrawUser`, which is
+    ///      operator-driven and idempotent per `withdrawalId`. This
+    ///      function is intentionally unkeyed (no id, no event id) because
+    ///      it is owner-only and infrequent; it would be a footgun to give
+    ///      the owner an idempotency-mapping they cannot exercise.
     function withdraw(address to, uint256 amount) external onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
@@ -123,6 +152,50 @@ contract ArenaSettlement is Ownable, Pausable, ReentrancyGuard {
         if (amount > available) revert InsufficientFloat(amount, available);
         token.safeTransfer(to, amount);
         emit Withdrawn(to, amount);
+    }
+
+    /// @notice Operator-driven user cash-out path. Releases `amount` of
+    ///         `token` from the prize float to `to` for the off-chain
+    ///         withdrawal identified by `withdrawalId`. Callable once per
+    ///         withdrawalId, only by the operator, only while unpaused.
+    /// @dev Backend usage: the ledger picks a unique `withdrawalId` per
+    ///      cash-out request (e.g. `keccak256(abi.encodePacked(userId,
+    ///      requestNonce))` or `bytes32(uint256(blockNumber))` style) and
+    ///      calls this on the operator signer. Network failures / RPC
+    ///      reorgs are recoverable by re-reading the receipt — a retry
+    ///      with the same id is a no-op revert (`AlreadyWithdrawn`), not a
+    ///      double payout.
+    /// @dev `amount` is the GROSS amount the operator transfers
+    ///      (`amountRaw = userRequestedUsd / 0.985`); the user receives
+    ///      `amountRaw` minus the on-chain USDT-on-Celo transfer fee
+    ///      (~1.5%, embedded in the token contract — see
+    ///      design.md cashout-quirk). The ~1.5% delta is operator-absorbed
+    ///      and is NOT deducted from the user's ledger balance.
+    /// @dev We deliberately do NOT validate `withdrawalId != bytes32(0)`:
+    ///      an empty id is a valid, single-use key (it would just consume
+    ///      slot 0 of the `withdrawn` mapping once). This mirrors the
+    ///      `settle` decision to not validate `matchId != bytes32(0)` —
+    ///      both are keyed mappings where the zero key is harmless and
+    ///      checking for it adds gas without security.
+    function withdrawUser(bytes32 withdrawalId, address to, uint256 amount)
+        external
+        onlyOperator
+        whenNotPaused
+        nonReentrant
+    {
+        if (to == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
+        if (withdrawn[withdrawalId]) revert AlreadyWithdrawn(withdrawalId);
+
+        uint256 available = token.balanceOf(address(this));
+        if (amount > available) revert InsufficientFloat(amount, available);
+
+        // Effects before interaction (checks-effects-interactions).
+        withdrawn[withdrawalId] = true;
+
+        token.safeTransfer(to, amount);
+
+        emit UserWithdrawn(withdrawalId, to, amount);
     }
 
     /// @notice Pay `amount` of `token` to `winner` for `matchId`. Callable
