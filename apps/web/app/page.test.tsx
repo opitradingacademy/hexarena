@@ -120,4 +120,14 @@ describe("DashboardPage", () => {
     const btn = screen.getByTestId("cashout-open");
     expect(btn).toBeDisabled();
   });
+
+  it("does not render the 'Recent matches' section on the Dashboard", () => {
+    render(<DashboardPage />);
+    // The "Recent matches" heading was removed from the Home in favor
+    // of the dedicated History tab in the BottomNav — the Dashboard
+    // should not duplicate the empty state. History lives at /history.
+    expect(screen.queryByText(/Recent matches/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("history-empty")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("history-list")).not.toBeInTheDocument();
+  });
 });

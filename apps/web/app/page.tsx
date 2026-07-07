@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ModeCard } from "../components/ModeCard";
-import { HistoryList, type HistoryEntry } from "../components/HistoryList";
 import { useIsMiniPay } from "../lib/useIsMiniPay";
 import { useUsdtBalance } from "../lib/useUsdtBalance";
 import { useServerLedger } from "../lib/useServerLedger";
@@ -29,7 +28,6 @@ export default function DashboardPage() {
     refresh: refreshGameBalance,
   } = useServerLedger(process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:3001");
   const isMiniPay = useIsMiniPay();
-  const recentMatches: HistoryEntry[] = [];
 
   const [depositOpen, setDepositOpen] = useState(false);
   const [selectedAmount, setSelectedAmount] = useState<number | null>(null);
@@ -198,13 +196,6 @@ export default function DashboardPage() {
           balanceUSD={balance}
           onPlay={() => router.push("/matchmaking?mode=arena")}
         />
-      </section>
-
-      <section className="mt-8">
-        <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">Recent matches</h3>
-        <div className="mt-3">
-          <HistoryList entries={recentMatches} />
-        </div>
       </section>
 
       {/* Deposit Modal - Step 1: Select Amount */}
