@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { getAddress } from "viem";
 import { HistoryList, type HistoryEntry } from "../../components/HistoryList";
-import { getSocket } from "../../lib/socketSingleton";
 import { getServerUrl } from "../../lib/serverUrl";
+import { waitForEthereum } from "../../lib/waitForEthereum";
+import { getWalletAddress } from "../../lib/wallet";
 
 type ServerMatch = {
   id: string;
@@ -40,31 +42,67 @@ function toHistoryEntry(match: ServerMatch, selfUserId: string): HistoryEntry {
 
 /**
  * History screen (design.md wireframe "4. Result / History").
- * Fetches real match history from apps/server's GET /matches/:userId
- * endpoint (task 2.14) once the socket is connected and its id is known.
+ *
+ * Resolves the user's wallet address (EIP-55 checksummed via viem's
+ * getAddress, matching the casing the server stores in the ledger and
+ * uses as `userId`) and fetches their match history via
+ * GET /matches/:userId.
+ *
+ * Why we don't use socket.id: the server stores matches keyed by the
+ * authenticated wallet, not by the socket id. Reading socket.id would
+ * always return an empty list — the original implementation bug.
  */
 export default function HistoryPage() {
   const [filter, setFilter] = useState<"ALL" | "CASUAL" | "ARENA">("ALL");
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const [selfAddress, setSelfAddress] = useState<string | null>(null);
 
   useEffect(() => {
-    const socket = getSocket();
-    if (!socket.connected) socket.connect();
+    let cancelled = false;
 
-    async function loadHistory() {
-      const selfUserId = socket.id;
-      if (!selfUserId) return;
-      const res = await fetch(`${getServerUrl()}/matches/${selfUserId}`);
-      const matches = (await res.json()) as ServerMatch[];
-      setEntries(matches.map((m) => toHistoryEntry(m, selfUserId)));
+    async function resolveWallet() {
+      await waitForEthereum();
+      if (cancelled) return;
+      const ethereum = window.ethereum as Parameters<typeof getWalletAddress>[0] | undefined;
+      const raw = await getWalletAddress(ethereum, { retries: 6, delayMs: 500 });
+      if (cancelled) return;
+      if (raw) {
+        try {
+          setSelfAddress(getAddress(raw));
+        } catch {
+          setSelfAddress(raw);
+        }
+      }
     }
 
-    if (socket.connected) void loadHistory();
-    socket.on("connect", loadHistory);
+    void resolveWallet();
     return () => {
-      socket.off("connect", loadHistory);
+      cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!selfAddress) return;
+    let cancelled = false;
+
+    async function loadHistory() {
+      try {
+        const res = await fetch(`${getServerUrl()}/matches/${selfAddress}`);
+        if (!res.ok) return;
+        const matches = (await res.json()) as ServerMatch[];
+        if (!cancelled) {
+          setEntries(matches.map((m) => toHistoryEntry(m, selfAddress!)));
+        }
+      } catch {
+        // network blip — leave previous entries in place
+      }
+    }
+
+    void loadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [selfAddress]);
 
   const filtered = entries.filter((e) => filter === "ALL" || e.mode === filter);
 
