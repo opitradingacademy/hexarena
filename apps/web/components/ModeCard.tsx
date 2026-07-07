@@ -35,8 +35,16 @@ export function ModeCard({ mode, balanceUSD, onPlay }: ModeCardProps) {
       data-testid="mode-card-arena"
       className="rounded-2xl border border-arena-gold/50 bg-arena-surface p-5 shadow-neonGold"
     >
-      <h3 className="text-lg font-black uppercase tracking-wide text-arena-gold">Arena</h3>
-      <p className="mt-1 text-sm text-slate-400">$0.10–$1</p>
+      <div className="flex items-center gap-2">
+        <h3 className="text-lg font-black uppercase tracking-wide text-arena-gold">Arena</h3>
+        <span
+          data-testid="mode-card-arena-badge"
+          className="rounded-full bg-arena-gold/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-arena-gold"
+        >
+          Pay to play
+        </span>
+      </div>
+      <p className="mt-1.5 text-sm text-slate-400">$0.10–$1 stake</p>
       {canPlay ? (
         <button
           type="button"

@@ -206,7 +206,7 @@ function MatchmakingScreen() {
   }
 
   return (
-    <main className="mx-auto flex max-w-md flex-col px-4 pt-6">
+    <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col px-4 pt-6 pb-24">
       <header className="flex rounded-full border border-arena-border bg-arena-surface p-1">
         <button
           type="button"
@@ -251,8 +251,8 @@ function MatchmakingScreen() {
             Waiting for your friend to join…
           </p>
           <p className="text-center text-xs text-slate-400">
-            Share this code with your friend — they enter it in MiniPay under
-            &ldquo;Join with a code&rdquo;.
+            Share this code with your friend — they enter it in MiniPay under &ldquo;Join with a
+            code&rdquo;.
           </p>
           <div
             data-testid="invite-code"
@@ -307,12 +307,12 @@ function MatchmakingScreen() {
           </button>
         </div>
       ) : (
-        <>
+        <div data-testid="matchmaking-idle" className="flex flex-1 flex-col justify-center">
           <button
             type="button"
             onClick={handleSearch}
             disabled={mode === "ARENA" && stake == null}
-            className="mt-8 w-full rounded-xl bg-arena-magenta py-3 text-sm font-bold uppercase text-white shadow-neonMagenta transition disabled:cursor-not-allowed disabled:opacity-30"
+            className="w-full rounded-xl bg-arena-magenta py-3 text-sm font-bold uppercase text-white shadow-neonMagenta transition disabled:cursor-not-allowed disabled:opacity-30"
           >
             Find match
           </button>
@@ -352,7 +352,7 @@ function MatchmakingScreen() {
               Join
             </button>
           </div>
-        </>
+        </div>
       )}
 
       <MatchmakingDepositDialog

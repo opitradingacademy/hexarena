@@ -25,4 +25,12 @@ describe("StakeSelector", () => {
     expect(screen.getByTestId("stake-chip-0.1")).toBeEnabled();
     expect(screen.getByTestId("stake-chip-1")).toBeEnabled();
   });
+
+  it("shows the 'Your stake' label and clarifying hint above the chips", () => {
+    render(<StakeSelector balanceUSD={1} selectedStake={null} onSelect={vi.fn()} />);
+    expect(screen.getByText(/Your stake/i)).toBeInTheDocument();
+    expect(screen.getByTestId("stake-selector-hint")).toHaveTextContent(
+      /what you.?ll put in the match/i,
+    );
+  });
 });
