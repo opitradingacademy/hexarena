@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { formatUSD } from "../lib/formatUSD";
 import { requestCashout, CashoutError, type CashoutSuccessResponse } from "../lib/cashout";
 import { getOrCreateIdempotencyKey, clearIdempotencyKey } from "../lib/cashoutIdempotency";
+import { shortenAddress } from "../lib/shortenAddress";
 import { ARENA_SETTLEMENT_ADDRESS } from "@hexarena/shared/chain";
 
 export type CashoutDialogProps = {
@@ -21,10 +22,6 @@ type Status =
   | { kind: "success"; withdrawal: CashoutSuccessResponse["withdrawal"]; idempotencyKey: string }
   | { kind: "server-error"; code: string; msg: string; idempotencyKey: string }
   | { kind: "client-error"; msg: string; idempotencyKey: string };
-
-function truncateAddress(addr: `0x${string}`): string {
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-}
 
 /**
  * Modal that performs the "Cash out" flow:
@@ -208,14 +205,14 @@ export function CashoutDialog({
         <p className="mt-3 text-xs text-slate-400">
           Destination wallet:{" "}
           <span className="font-mono" data-testid="destination-wallet">
-            {truncateAddress(wallet)}
+            {shortenAddress(wallet)}
           </span>
         </p>
 
         {settlementContract && (
           <details className="mt-2 text-xs text-slate-500">
             <summary className="cursor-pointer select-none">From which pool?</summary>
-            <p className="mt-1 font-mono">{truncateAddress(settlementContract)}</p>
+            <p className="mt-1 font-mono">{shortenAddress(settlementContract)}</p>
           </details>
         )}
 
