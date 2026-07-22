@@ -63,11 +63,22 @@ const SETTLEMENT_TOKEN_DECIMALS = 6;
  * on-chain" (idempotent — return cached state) from a real revert
  * (InsufficientFloat, NotOperator, etc.).
  *
- * Computed: keccak256("AlreadyWithdrawn(bytes32)")[0:4] = 0x51dd3741.
+ * Computed: keccak256("AlreadyWithdrawn(bytes32)")[0:4] = 0xc4e4c7d9.
  * Hardcoding the constant is intentional — recomputing it at runtime
  * costs a keccak hash on every revert and the ABI is immutable.
  */
-export const ALREADY_WITHDRAWN_SELECTOR = "0x51dd3741" as const;
+export const ALREADY_WITHDRAWN_SELECTOR = "0xc4e4c7d9" as const;
+
+/**
+ * Selector of the `InsufficientFloat(uint256,uint256)` custom error.
+ * Previously misidentified as ALREADY_WITHDRAWN_SELECTOR (0x51dd3741
+ * is actually this error, not AlreadyWithdrawn) — that bug caused the
+ * server to burn 3 retry attempts rotating withdrawalId hashes on a
+ * float shortage that no amount of retrying could fix, then surface a
+ * misleading "AlreadyWithdrawn"-flavored failure instead of the real
+ * cause. Computed: keccak256("InsufficientFloat(uint256,uint256)")[0:4].
+ */
+export const INSUFFICIENT_FLOAT_SELECTOR = "0x51dd3741" as const;
 
 /**
  * Returns true iff the error message from a viem
@@ -85,6 +96,23 @@ export function isAlreadyWithdrawnRevert(e: unknown): boolean {
   const msg = (e as { message?: string; shortMessage?: string }).message ?? "";
   const short = (e as { shortMessage?: string }).shortMessage ?? "";
   return msg.includes(ALREADY_WITHDRAWN_SELECTOR) || short.includes(ALREADY_WITHDRAWN_SELECTOR);
+}
+
+/**
+ * Returns true iff the error looks like the on-chain `InsufficientFloat`
+ * revert — the operator's prize float doesn't hold enough of the
+ * settlement token to cover this withdrawal. Retrying with a different
+ * `withdrawalId` can never fix this (the float doesn't change), so the
+ * caller should surface a distinct, actionable failure instead of
+ * burning retry attempts.
+ */
+export function isInsufficientFloatRevert(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const msg = (e as { message?: string; shortMessage?: string }).message ?? "";
+  const short = (e as { shortMessage?: string }).shortMessage ?? "";
+  return (
+    msg.includes(INSUFFICIENT_FLOAT_SELECTOR) || short.includes(INSUFFICIENT_FLOAT_SELECTOR)
+  );
 }
 
 export async function withdrawUsdtOnChain(

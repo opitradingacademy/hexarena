@@ -303,7 +303,7 @@ describe("POST /api/cashout", () => {
     const cachedId = keccak256(toBytes(IDEMPOTENCY_KEY));
     const withdrawFn = vi.fn(async () => {
       throw new Error(
-        "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741, args: 0x...",
+        "The contract function 'withdrawUser' reverted with the following signature: 0xc4e4c7d9, args: 0x...",
       );
     });
     await withServer(
@@ -353,7 +353,7 @@ describe("POST /api/cashout", () => {
     // so the user can see the debit was reversed.
     const withdrawFn = vi.fn(async () => {
       throw new Error(
-        "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741",
+        "The contract function 'withdrawUser' reverted with the following signature: 0xc4e4c7d9",
       );
     });
     await withServer(
@@ -377,6 +377,40 @@ describe("POST /api/cashout", () => {
         expect(withdrawFn).toHaveBeenCalledTimes(4);
         expect(status).toBe(422);
         expect(body.code).toBe("CASHOUT_FAILED");
+        expect(body.withdrawal.status).toBe("FAILED");
+      },
+    );
+  });
+
+  it("on-chain InsufficientFloat: fails fast without burning retry attempts", async () => {
+    // The operator's prize float is genuinely depleted — rotating the
+    // withdrawalId can never fix this, so the server must not spend
+    // MAX_BURNED_RETRIES attempts on it and must surface a distinct
+    // code from CASHOUT_FAILED/IDEMPOTENCY_CONFLICT.
+    const withdrawFn = vi.fn(async () => {
+      throw new Error(
+        "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741, args: (0x..., 0x..., 101523)",
+      );
+    });
+    await withServer(
+      (store) => {
+        store.upsertUser(USER, USER);
+        creditDeposit(store, USER, "0xdephash", 1.0);
+      },
+      withdrawFn,
+      async (port) => {
+        const { status, body } = await fetchJson(`http://127.0.0.1:${port}/api/cashout`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-wallet-address": USER,
+            "idempotency-key": IDEMPOTENCY_KEY,
+          },
+          body: JSON.stringify({ amountUSD: 0.1 }),
+        });
+        expect(withdrawFn).toHaveBeenCalledTimes(1);
+        expect(status).toBe(422);
+        expect(body.code).toBe("INSUFFICIENT_FLOAT");
         expect(body.withdrawal.status).toBe("FAILED");
       },
     );

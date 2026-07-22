@@ -53,7 +53,7 @@ import { InsufficientBalanceError } from "./ledger/errors";
 import type { LedgerStore } from "./ledger/types";
 import { applyCorsHeaders } from "./cors";
 import type { WithdrawOnChainResult } from "./chain/withdraw";
-import { isAlreadyWithdrawnRevert } from "./chain/withdraw";
+import { isAlreadyWithdrawnRevert, isInsufficientFloatRevert } from "./chain/withdraw";
 
 export type WithdrawOnChainConfig = {
   /**
@@ -264,6 +264,21 @@ export async function handleCashoutRequest(
       //   - A previous session signed with this hash before crashing.
       //   - The client UI is regenerating the same key for some
       //     reason (MiniPay WebView localStorage caching).
+      if (isInsufficientFloatRevert(e)) {
+        // Rotating the withdrawalId can never fix this — the
+        // operator's prize float genuinely doesn't hold enough of the
+        // settlement token. Fail fast with a distinct code instead of
+        // burning MAX_BURNED_RETRIES attempts on a shortage that
+        // won't go away between retries.
+        const failed = cashoutFail(store, withdrawalId);
+        respond(res, 422, {
+          ok: false,
+          code: "INSUFFICIENT_FLOAT",
+          msg: "Operator prize float is temporarily depleted — try again later",
+          withdrawal: serializeWithdrawal(failed),
+        });
+        return true;
+      }
       if (isAlreadyWithdrawnRevert(e) && attempt < MAX_BURNED_RETRIES) {
         attempt += 1;
         broadcastHash = keccak256(toBytes(`${idempotencyKey}#retry${attempt}:${Math.random()}`));

@@ -118,11 +118,11 @@ describe("withdrawUsdtOnChain", () => {
     }
   });
 
-  it("isAlreadyWithdrawnRevert detects the 0x51dd3741 selector in viem ContractFunctionExecutionError", async () => {
+  it("isAlreadyWithdrawnRevert detects the 0xc4e4c7d9 selector in viem ContractFunctionExecutionError", async () => {
     const { isAlreadyWithdrawnRevert } = await import("./withdraw");
     // Mimic the viem error shape produced on a real revert.
     const viemError = new Error(
-      "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741, args: ...",
+      "The contract function 'withdrawUser' reverted with the following signature: 0xc4e4c7d9, args: ...",
     );
     expect(isAlreadyWithdrawnRevert(viemError)).toBe(true);
 
@@ -132,6 +132,31 @@ describe("withdrawUsdtOnChain", () => {
     expect(isAlreadyWithdrawnRevert(new Error("network error"))).toBe(false);
     expect(isAlreadyWithdrawnRevert(null)).toBe(false);
     expect(isAlreadyWithdrawnRevert(undefined)).toBe(false);
-    expect(isAlreadyWithdrawnRevert("0x51dd3741 raw string")).toBe(false);
+    expect(isAlreadyWithdrawnRevert("0xc4e4c7d9 raw string")).toBe(false);
+    // The (previously mislabeled) InsufficientFloat selector must NOT be
+    // mistaken for AlreadyWithdrawn.
+    expect(
+      isAlreadyWithdrawnRevert(
+        new Error(
+          "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("isInsufficientFloatRevert detects the 0x51dd3741 selector", async () => {
+    const { isInsufficientFloatRevert } = await import("./withdraw");
+    const viemError = new Error(
+      "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741, args: ...",
+    );
+    expect(isInsufficientFloatRevert(viemError)).toBe(true);
+    expect(isInsufficientFloatRevert(new Error("execution reverted"))).toBe(false);
+    expect(
+      isInsufficientFloatRevert(
+        new Error(
+          "The contract function 'withdrawUser' reverted with the following signature: 0xc4e4c7d9",
+        ),
+      ),
+    ).toBe(false);
   });
 });

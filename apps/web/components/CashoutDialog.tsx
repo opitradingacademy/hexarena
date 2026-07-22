@@ -151,7 +151,8 @@ export function CashoutDialog({
       // different bytes32 and will not collide. For transient network
       // errors and other 4xx/5xx, KEEP the key so Retry replays
       // safely.
-      const isTerminal = code === "CASHOUT_FAILED" || code === "IDEMPOTENCY_CONFLICT";
+      const isTerminal =
+        code === "CASHOUT_FAILED" || code === "IDEMPOTENCY_CONFLICT" || code === "INSUFFICIENT_FLOAT";
       if (isTerminal) {
         clearIdempotencyKey({ wallet, amountUSD, attempt });
         setAttempt((a) => a + 1);
