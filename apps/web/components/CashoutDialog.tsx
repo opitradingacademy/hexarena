@@ -80,6 +80,11 @@ export function CashoutDialog({
     // would surface as a 400 BAD_REQUEST, which is handled below.
     const idempotencyKey =
       getOrCreateIdempotencyKey({ wallet, amountUSD, attempt }) ?? cryptoSafeFallback();
+    // [HexArena:diag-cashout-web] 2026-07-22 — log the key+attempt
+    // to detect if the client is reusing the same key across retries.
+    console.log(
+      `[HexArena:diag-cashout-web] attempt=${attempt} key=${idempotencyKey} open=${open}`,
+    );
 
     // Defensive: if the dialog is opened with insufficient balance or
     // below minimum, don't fire the request — the server would reject
@@ -169,6 +174,9 @@ export function CashoutDialog({
     // 5xx), reuse the same key: server returns the cached state on
     // the same key+amount. For CASHOUT_FAILED, the previous handler
     // already cleared the key and bumped attempt.
+    //
+    // [HexArena:diag-cashout-web] 2026-07-22 — log the click.
+    console.log(`[HexArena:diag-cashout-web] handleRetry: attempt=${attempt}`);
     void handleConfirm();
   }
 
@@ -176,6 +184,7 @@ export function CashoutDialog({
     // User-initiated new attempt after a terminal failure: bump the
     // attempt counter (which also generates a fresh key via the
     // storage helper) and reset to idle so the confirm button reappears.
+    console.log(`[HexArena:diag-cashout-web] handleTryAgain: was attempt=${attempt}`);
     setAttempt((a) => a + 1);
     setStatus({ kind: "idle" });
   }
