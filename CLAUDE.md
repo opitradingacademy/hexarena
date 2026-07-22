@@ -63,7 +63,7 @@ Bug reportado por usuario + reproducido por nosotros: salir de la app durante un
 
 ### Cash out (game balance → USDT on-chain) — probado y funcionando en producción (2026-07-06)
 
-**Estado al 2026-07-22**: cashout working el 6 de julio, pero el 22 de julio entró en loop `AlreadyWithdrawn`. Ver **"Cashout AlreadyWithdrawn loop"** abajo para la sesión de debugging activa. El código en `main` está actualizado (commits `c5529bc`, `3d70e08`, `79464f9`, `e3f2061`, `74307f9`, `f69d038`) pero Railway no se rebuildeó con esos commits — la producción aún ejecuta `ae23816`.
+**Estado al 2026-07-22**: cashout working el 6 de julio, entró en loop `AlreadyWithdrawn`/`CASHOUT_FAILED` el 22 de julio, **causa raíz encontrada y resuelta el mismo día** (commit `32f5ca3`). Ver **"Cashout AlreadyWithdrawn loop — RESUELTO"** abajo.
 
 Cierra el loop de Arena: antes los payouts (PAYOUT en el ledger interno) acreditaban Game Balance pero el USDT nunca salía del contrato a la wallet del user. Ahora el botón **"Cash out"** en el Dashboard mueve ese balance interno a USDT real en la MiniPay wallet. Naming elegido por el usuario ("Cash out" en vez de "Withdraw") por claridad para usuarios emergentes — copy rules respetadas: sin "Gas"/"Crypto"/"Onramp", todo en USD/USDT, addresses truncadas `0x1234…5678`.
 
@@ -123,38 +123,42 @@ Reemplazado el reloj sudden-death por jugador por un **reloj único de partida**
 - Operator treasury address real configurada en Railway: `0x34d5d015B4805E985619D0F4aaCb6343a6457fF2` (separada de la wallet del user).
 - 169/169 tests Vitest verde al cierre de cada PR; serie de fixes de esta sesión movió la suite a **186/186 verde**.
 
-### Cashout AlreadyWithdrawn loop (2026-07-22, en investigación)
+### Cashout AlreadyWithdrawn loop — RESUELTO (2026-07-22)
 
-**Síntoma**: el usuario (`0x5288acfd...051b`) ve `code: IDEMPOTENCY_CONFLICT`/"use a fresh Idempotency-Key" o `code: CASHOUT_FAILED` cada vez que intenta cashout $0.10 USDT desde el Dashboard. El revert on-chain es siempre `0x51dd3741` (selector del custom error `AlreadyWithdrawn(bytes32)` en `ArenaSettlement.sol`).
+**Síntoma**: el usuario (`0x5288AcFd...051b`) veía `code: CASHOUT_FAILED` (revert `0x51dd3741`) en cada intento de cashout de $0.10 USDT desde el Dashboard, incluso con idempotency keys 100% nuevas.
 
-**Serie de fixes aplicados (todos en `main`, todos pusheados, todos pasan los tests):**
+**Causa raíz real: una constante de selector mal calculada, no un problema de deploy ni de idempotencia.**
 
-1. **Server: `withdrawalId = keccak256(idempotencyKey)`** (`c5529bc`). Reemplaza `randomUUID()` por un hash determinístico de la key. La intención: hacer que el `withdrawn[withdrawalId]` del contrato sea la fuente de verdad de idempotencia — un retry con misma key siempre hit el mismo hash y revierte `AlreadyWithdrawn`, lo que el server reconoce como replay. **Pero este fix por sí solo no resolvió el loop** — el server devolvía 409 IDEMPOTENCY_CONFLICT cuando la fila DB estaba PENDING o no existía, incluso con keys nuevas.
+`ALREADY_WITHDRAWN_SELECTOR = "0x51dd3741"` en `apps/server/chain/withdraw.ts` estaba **mal** — ese selector es en realidad `InsufficientFloat(uint256,uint256)`. El selector real de `AlreadyWithdrawn(bytes32)` es `0xc4e4c7d9`. Confirmado con `cast sig "AlreadyWithdrawn(bytes32)"` / `cast sig "InsufficientFloat(uint256,uint256)"` y simulando la llamada exacta contra el contrato en Mainnet con `cast call withdrawUser(...) --from <operator>`: el revert decodificó exactamente como `InsufficientFloat(requested=101523, available=78578)` — el contrato tenía solo ≈$0.0786 USDT de float, insuficiente para un cashout de $0.10 (necesita $0.1015 crudo tras el fee absorption del 1.5%).
 
-2. **Client: `IDEMPOTENCY_CONFLICT` se trata como terminal en `CashoutDialog`** (`3d70e08`). Cambio en `apps/web/components/CashoutDialog.tsx:149` — `isTerminal` ahora incluye `IDEMPOTENCY_CONFLICT` además de `CASHOUT_FAILED`. Eso limpia la key del localStorage y bumpea `attempt`, así `Try again` genera una key nueva. **Pero el problema real es el server, no el cliente**.
+Como el server tenía mal etiquetado ese selector como "AlreadyWithdrawn", cada cashout entraba al retry loop (rotaba a 3 hashes random nuevos, ninguno podía arreglar un float insuficiente) y terminaba en `CASHOUT_FAILED` tras agotar los reintentos — un fallo 100% predecible, no un bug intermitente.
 
-3. **Server: diag logs** (`79464f9`). Logs `[HexArena:diag-cashout]` en cada handler — wallet, amount, idempotencyKey, derivedWithdrawalId, estado de la cache row. **Apareció igual el 409 incluso con keys completamente nuevas** (ej. `key=679efd57-...` → `hash=0xa67ce...` → "already revoked"). Algo más profundo.
+**Cómo se descartaron las hipótesis previas (documentadas abajo por transparencia, todas incorrectas o parciales):**
 
-4. **Web: diag logs** (`e3f2061`). Logs `[HexArena:diag-cashout-web]` en cliente — `attempt`, `key`, `open`.
+- ~~Railway servía una build vieja (`ae23816`) sin los fixes~~ → **descartado**: se confirmó vía el dashboard de Railway que el deploy activo corría `74307f9` (el commit con el retry loop), y el bug seguía. El auto-deploy sí funcionaba bien.
+- ~~Problema de idempotencia / DB perdiendo filas~~ → los logs `[HexArena:diag-cashout]` mostraban decenas de hashes **completamente random y nunca usados antes** reventando TODOS con el mismo selector — estadísticamente imposible si `withdrawn[hash]` fuera el chequeo real fallando. Esa observación fue la pista que llevó a sospechar de la clasificación del error, no del hash en sí.
+- `cast call withdrawn(bytes32)` con uno de esos hashes random confirmó `false` — la mapping nunca estuvo corrompida; el problema era 100% la mala etiqueta del selector.
 
-5. **Server: retry con hash fresh en `AlreadyWithdrawn`** (`74307f9`). Loop de hasta 4 intentos (1 inicial + 3 retries) rotando a `keccak256(key#retryN:Math.random())` cada vez. Solo devuelve 422 CASHOUT_FAILED si los 4 hashes reverten. **Pero sigo viendo 422 con 1 solo hash en el log**.
+**Fix aplicado (commit `32f5ca3`, pusheado y deployado):**
 
-**Hipótesis pendiente de validación (a confirmar)**: **Railway no se rebuildeó con los commits `c5529bc`, `74307f9`, etc.** Pruebas directas con `curl` al endpoint de Railway aún responden con CASHOUT_FAILED y un solo hash en args — comportamiento esperado del código viejo `randomUUID()` que nunca tuvo retry. Test directo: `curl -X POST ... -H "idempotency-key: b0010000-0000-4000-8000-000000000001" ...` retorna `args: (0xef4c89d5..., 0x5288..., 101523)` con CASHOUT_FAILED. **El hash es fresh de la key mandada, pero ya está en `withdrawn[]`**. El `git log origin/main` sobre `apps/server/cashoutEndpoint.ts` muestra que origin/main solo tiene `ae23816` (commit inicial) — los demás están en local.
+1. `apps/server/chain/withdraw.ts`: `ALREADY_WITHDRAWN_SELECTOR` corregido a `0xc4e4c7d9`; nueva constante `INSUFFICIENT_FLOAT_SELECTOR = 0x51dd3741` + helper `isInsufficientFloatRevert()`.
+2. `apps/server/cashoutEndpoint.ts`: nuevo branch que detecta `InsufficientFloat` y falla rápido con código `INSUFFICIENT_FLOAT` (0 reintentos desperdiciados), antes de entrar al retry loop de `AlreadyWithdrawn`.
+3. `apps/web/components/CashoutDialog.tsx`: `INSUFFICIENT_FLOAT` agregado a `isTerminal` — un retry del usuario genera key nueva.
+4. Tests corregidos en `withdraw.test.ts` / `cashoutEndpoint.test.ts` (fixtures de `AlreadyWithdrawn` ahora usan el selector correcto `0xc4e4c7d9`; nuevo test que verifica que `InsufficientFloat` falla en el primer intento sin reintentos).
+5. **Fondeo manual del contrato**: usuario corrió `fund()` para llevar el float de ~$0.0786 a **$1.25 USDT** — verificado on-chain post-fondeo.
 
-**Acción en curso**: empty commit `f69d038` ("chore: trigger Railway redeploy") pusheado para forzar a Railway a rebuildear. **Si el auto-deploy no se dispara**, el user debe ir al dashboard de Railway → Settings → Clear build cache + redeploy manual. Verificar que el SHA activo coincide con `git rev-parse main` (= `f69d038` o posterior).
-
-**Estado al cierre**: 12/12 server tests pass, typecheck clean, **0 changes confirmados en producción**. El loop persiste porque Railway sirve una build vieja. El fix está listo en el repo, pero el deploy no se aplicó.
+**Verificación**: 19/19 tests de cashout/withdraw verdes, 336/338 de la suite completa (2 flakes preexistentes no relacionados en `matchmaking/page.test.tsx`), typecheck limpio. Probado en producción por el usuario tras el deploy — **cashout confirma correctamente**.
 
 **Archivos clave:**
 
-- Server: `apps/server/cashoutEndpoint.ts` (líneas 213-308: derivation + retry loop, `[HexArena:diag-cashout]` logs).
-- Chain: `apps/server/chain/withdraw.ts` (helper `isAlreadyWithdrawnRevert`, constante `ALREADY_WITHDRAWN_SELECTOR = 0x51dd3741`).
-- Web: `apps/web/components/CashoutDialog.tsx:149` (isTerminal incluye IDEMPOTENCY_CONFLICT), diag logs.
-- Web: `apps/web/lib/cashoutIdempotency.ts` (storage helpers — no se tocó).
-- Contrato: `packages/contracts/src/ArenaSettlement.sol:180-199` (withdrawn[id] se setea ANTES de safeTransfer — un revert descarta todo, así que las txs que revierten por AlreadyWithdrawn NO consumen slots).
-- Tipos: `apps/server/ledger/types.ts:42-60` (Withdrawal.id ahora es "0x-prefixed 32 bytes hash", no UUID v4).
+- Server: `apps/server/cashoutEndpoint.ts` (branch `INSUFFICIENT_FLOAT` antes del retry loop de `AlreadyWithdrawn`).
+- Chain: `apps/server/chain/withdraw.ts` (`ALREADY_WITHDRAWN_SELECTOR = 0xc4e4c7d9`, `INSUFFICIENT_FLOAT_SELECTOR = 0x51dd3741`, `isInsufficientFloatRevert`).
+- Web: `apps/web/components/CashoutDialog.tsx` (`isTerminal` incluye `INSUFFICIENT_FLOAT`).
+- Contrato: `packages/contracts/src/ArenaSettlement.sol:99-104` (definición de los custom errors — `AlreadyWithdrawn(bytes32)`, `InsufficientFloat(uint256,uint256)`).
 
-**Lección aprendida**: en Railway monorepo, los auto-deploys por push a main **no son 100% confiables** — siempre verificar el SHA desplegado después de un fix crítico. El fallback es empty commit + manual redeploy.
+**Lección aprendida**: cuando se hardcodea un selector de error de 4 bytes como constante manual en vez de calcularlo desde el ABI en runtime, **siempre verificar con `cast sig "ErrorName(types)"`** antes de confiar en el cálculo de un comentario — un error de cálculo/copy-paste acá generó semanas de debugging en la dirección equivocada (teorías de idempotencia, DB loss, deploy stale) cuando el bug real era una sola constante hex incorrecta. También: cuando aparece un patrón de "el mismo fallo específico pasa sin importar qué varíes" (acá: hashes random siempre colisionando), sospechar de la **clasificación** del fallo antes que de la lógica que lo maneja — `cast call` contra el contrato real en cadena es la fuente de verdad y hay que consultarla directamente en vez de solo razonar sobre el TypeScript.
+
+**Diagnóstico técnico previo que sigue vigente** (no afectado por este fix, documentado en la sección "Cash out" arriba): arquitectura del contrato consolidado, fee absorption, orden de operaciones debit-first, patrón de idempotencia por `(userId, idempotencyKey)`.
 
 ### Estado del Arena deposit flow al cierre
 
