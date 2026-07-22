@@ -168,8 +168,16 @@ export async function handleCashoutRequest(
 
   store.upsertUser(wallet, wallet);
 
+  // [HexArena:diag-cashout] 2026-07-22 — log every cashout to
+  // diagnose the 409 IDEMPOTENCY_CONFLICT loop. Remove after root
+  // cause is confirmed.
+  console.log(`[HexArena:diag-cashout] wallet=${wallet} amount=${amountUSD} key=${idempotencyKey}`);
+
   // ---- Idempotency check ----
   const existing = store.getWithdrawalByIdempotencyKey(wallet, idempotencyKey);
+  console.log(
+    `[HexArena:diag-cashout] existingByKey=${existing ? existing.id : "none"}/${existing ? existing.status : "-"}`,
+  );
   if (existing) {
     if (existing.amountUSD !== amountUSD) {
       respond(res, 409, {
@@ -203,32 +211,12 @@ export async function handleCashoutRequest(
   }
 
   // ---- Derive withdrawalId from idempotencyKey ----
-  //
-  // Why `keccak256(idempotencyKey)` instead of `randomUUID()`?
-  //
-  // The on-chain `withdrawUser(withdrawalId, ...)` is gated by
-  // `withdrawn[withdrawalId]`. If we signed with a fresh random UUID
-  // per request, a retry of the SAME logical cash-out (same
-  // idempotencyKey) would sign with a DIFFERENT random UUID — but
-  // because the user already got their USDT, a second post would
-  // only succeed if the contract still has float, and the user would
-  // get paid twice. The Random-UUID approach handles this via the
-  // DB-side `(userId, idempotencyKey)` check, BUT the on-chain
-  // `withdrawn[]` is the only guard if the DB row was lost (e.g.,
-  // SQLite volume wiped between attempt 1 and attempt 2 while the
-  // tx already mined on-chain).
-  //
-  // A deterministic `withdrawalId = keccak256(idempotencyKey)` makes
-  // the on-chain guard authoritative: any retry with the same key
-  // hits `withdrawn[...] == true` and reverts `AlreadyWithdrawn`,
-  // which the server recognizes as an idempotent replay (below) and
-  // returns the cached row. The DB lookup is the fast path; the
-  // on-chain revert is the recovery path.
-  //
-  // The "id" column in the withdrawals table is now a 0x-prefixed
-  // bytes32 hash (66 chars), still TEXT PRIMARY KEY — no schema
-  // migration needed.
   const withdrawalId = keccak256(toBytes(idempotencyKey));
+  console.log(`[HexArena:diag-cashout] derivedWithdrawalId=${withdrawalId}`);
+  const existingByHash = store.getWithdrawal(withdrawalId);
+  console.log(
+    `[HexArena:diag-cashout] existingByHash=${existingByHash ? `${existingByHash.id}/${existingByHash.status}` : "none"}`,
+  );
 
   // ---- Debit ledger + create PENDING withdrawal ----
   try {
@@ -254,12 +242,19 @@ export async function handleCashoutRequest(
       amountUSD,
     });
   } catch (e) {
+    // [HexArena:diag-cashout] 2026-07-22 — log the catch path.
+    console.log(
+      `[HexArena:diag-cashout] catch: withdrawalId=${withdrawalId} err=${(e as Error).message?.slice(0, 200)}`,
+    );
     // Idempotent replay: the server-side DB lookup at the top of the
     // handler missed (e.g. DB was wiped between attempt 1 and this
     // retry) but the on-chain `withdrawn[]` guard says this
     // withdrawalId was already used. The user already got their USDT.
     if (isAlreadyWithdrawnRevert(e)) {
       const cached = store.getWithdrawal(withdrawalId);
+      console.log(
+        `[HexArena:diag-cashout] alreadyWithdrawn: cached=${cached ? `${cached.id}/${cached.status}` : "none"}`,
+      );
       // CONFIRMED rows are the healthy case: the cached row was
       // successfully written by attempt 1, only the network re-call
       // re-broadcast (which the contract correctly rejected). Return
