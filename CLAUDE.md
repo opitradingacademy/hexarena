@@ -63,6 +63,8 @@ Bug reportado por usuario + reproducido por nosotros: salir de la app durante un
 
 ### Cash out (game balance → USDT on-chain) — probado y funcionando en producción (2026-07-06)
 
+**Estado al 2026-07-22**: cashout working el 6 de julio, pero el 22 de julio entró en loop `AlreadyWithdrawn`. Ver **"Cashout AlreadyWithdrawn loop"** abajo para la sesión de debugging activa. El código en `main` está actualizado (commits `c5529bc`, `3d70e08`, `79464f9`, `e3f2061`, `74307f9`, `f69d038`) pero Railway no se rebuildeó con esos commits — la producción aún ejecuta `ae23816`.
+
 Cierra el loop de Arena: antes los payouts (PAYOUT en el ledger interno) acreditaban Game Balance pero el USDT nunca salía del contrato a la wallet del user. Ahora el botón **"Cash out"** en el Dashboard mueve ese balance interno a USDT real en la MiniPay wallet. Naming elegido por el usuario ("Cash out" en vez de "Withdraw") por claridad para usuarios emergentes — copy rules respetadas: sin "Gas"/"Crypto"/"Onramp", todo en USD/USDT, addresses truncadas `0x1234…5678`.
 
 **Arquitectura — consolidada en un solo contrato.** Toda la actividad on-chain de Arena (settle de premios + cashout de usuarios) fluye por `ArenaSettlement`. Esto se hizo deliberadamente para **talent.app Proof of Ship**: registramos un solo contrato y la sección "Transactions" del perfil del proyecto muestra settle() y withdrawUser() unificados. Contrato anterior (`0x108E012C…`) reemplazado por **nuevo `0x4da63741993F0C5B85148C412bc890ff0659AB3A`** (verificado en Sourcify).
@@ -120,6 +122,39 @@ Reemplazado el reloj sudden-death por jugador por un **reloj único de partida**
 - **Test flaky preexistente (no resuelto, no bloqueante)**: `apps/web/app/matchmaking/page.test.tsx` — el placeholder "Loading wallet…" y el `StakeConfirmDialog` real comparten `data-testid="stake-confirm-dialog"`, por lo que `waitFor(() => getByTestId(...))` a veces resuelve sobre el placeholder antes de que `senderAddress` esté listo, y el click subsiguiente en `stake-confirm-button` falla. Afecta 2/186 tests de forma intermitente.
 - Operator treasury address real configurada en Railway: `0x34d5d015B4805E985619D0F4aaCb6343a6457fF2` (separada de la wallet del user).
 - 169/169 tests Vitest verde al cierre de cada PR; serie de fixes de esta sesión movió la suite a **186/186 verde**.
+
+### Cashout AlreadyWithdrawn loop (2026-07-22, en investigación)
+
+**Síntoma**: el usuario (`0x5288acfd...051b`) ve `code: IDEMPOTENCY_CONFLICT`/"use a fresh Idempotency-Key" o `code: CASHOUT_FAILED` cada vez que intenta cashout $0.10 USDT desde el Dashboard. El revert on-chain es siempre `0x51dd3741` (selector del custom error `AlreadyWithdrawn(bytes32)` en `ArenaSettlement.sol`).
+
+**Serie de fixes aplicados (todos en `main`, todos pusheados, todos pasan los tests):**
+
+1. **Server: `withdrawalId = keccak256(idempotencyKey)`** (`c5529bc`). Reemplaza `randomUUID()` por un hash determinístico de la key. La intención: hacer que el `withdrawn[withdrawalId]` del contrato sea la fuente de verdad de idempotencia — un retry con misma key siempre hit el mismo hash y revierte `AlreadyWithdrawn`, lo que el server reconoce como replay. **Pero este fix por sí solo no resolvió el loop** — el server devolvía 409 IDEMPOTENCY_CONFLICT cuando la fila DB estaba PENDING o no existía, incluso con keys nuevas.
+
+2. **Client: `IDEMPOTENCY_CONFLICT` se trata como terminal en `CashoutDialog`** (`3d70e08`). Cambio en `apps/web/components/CashoutDialog.tsx:149` — `isTerminal` ahora incluye `IDEMPOTENCY_CONFLICT` además de `CASHOUT_FAILED`. Eso limpia la key del localStorage y bumpea `attempt`, así `Try again` genera una key nueva. **Pero el problema real es el server, no el cliente**.
+
+3. **Server: diag logs** (`79464f9`). Logs `[HexArena:diag-cashout]` en cada handler — wallet, amount, idempotencyKey, derivedWithdrawalId, estado de la cache row. **Apareció igual el 409 incluso con keys completamente nuevas** (ej. `key=679efd57-...` → `hash=0xa67ce...` → "already revoked"). Algo más profundo.
+
+4. **Web: diag logs** (`e3f2061`). Logs `[HexArena:diag-cashout-web]` en cliente — `attempt`, `key`, `open`.
+
+5. **Server: retry con hash fresh en `AlreadyWithdrawn`** (`74307f9`). Loop de hasta 4 intentos (1 inicial + 3 retries) rotando a `keccak256(key#retryN:Math.random())` cada vez. Solo devuelve 422 CASHOUT_FAILED si los 4 hashes reverten. **Pero sigo viendo 422 con 1 solo hash en el log**.
+
+**Hipótesis pendiente de validación (a confirmar)**: **Railway no se rebuildeó con los commits `c5529bc`, `74307f9`, etc.** Pruebas directas con `curl` al endpoint de Railway aún responden con CASHOUT_FAILED y un solo hash en args — comportamiento esperado del código viejo `randomUUID()` que nunca tuvo retry. Test directo: `curl -X POST ... -H "idempotency-key: b0010000-0000-4000-8000-000000000001" ...` retorna `args: (0xef4c89d5..., 0x5288..., 101523)` con CASHOUT_FAILED. **El hash es fresh de la key mandada, pero ya está en `withdrawn[]`**. El `git log origin/main` sobre `apps/server/cashoutEndpoint.ts` muestra que origin/main solo tiene `ae23816` (commit inicial) — los demás están en local.
+
+**Acción en curso**: empty commit `f69d038` ("chore: trigger Railway redeploy") pusheado para forzar a Railway a rebuildear. **Si el auto-deploy no se dispara**, el user debe ir al dashboard de Railway → Settings → Clear build cache + redeploy manual. Verificar que el SHA activo coincide con `git rev-parse main` (= `f69d038` o posterior).
+
+**Estado al cierre**: 12/12 server tests pass, typecheck clean, **0 changes confirmados en producción**. El loop persiste porque Railway sirve una build vieja. El fix está listo en el repo, pero el deploy no se aplicó.
+
+**Archivos clave:**
+
+- Server: `apps/server/cashoutEndpoint.ts` (líneas 213-308: derivation + retry loop, `[HexArena:diag-cashout]` logs).
+- Chain: `apps/server/chain/withdraw.ts` (helper `isAlreadyWithdrawnRevert`, constante `ALREADY_WITHDRAWN_SELECTOR = 0x51dd3741`).
+- Web: `apps/web/components/CashoutDialog.tsx:149` (isTerminal incluye IDEMPOTENCY_CONFLICT), diag logs.
+- Web: `apps/web/lib/cashoutIdempotency.ts` (storage helpers — no se tocó).
+- Contrato: `packages/contracts/src/ArenaSettlement.sol:180-199` (withdrawn[id] se setea ANTES de safeTransfer — un revert descarta todo, así que las txs que revierten por AlreadyWithdrawn NO consumen slots).
+- Tipos: `apps/server/ledger/types.ts:42-60` (Withdrawal.id ahora es "0x-prefixed 32 bytes hash", no UUID v4).
+
+**Lección aprendida**: en Railway monorepo, los auto-deploys por push a main **no son 100% confiables** — siempre verificar el SHA desplegado después de un fix crítico. El fallback es empty commit + manual redeploy.
 
 ### Estado del Arena deposit flow al cierre
 
