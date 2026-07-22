@@ -345,11 +345,12 @@ describe("POST /api/cashout", () => {
     );
   });
 
-  it("on-chain AlreadyWithdrawn with no cached row: returns 409 IDEMPOTENCY_CONFLICT", async () => {
-    // Even rarer scenario: the withdrawalId burned on-chain was
-    // never persisted locally (e.g. Crash before cashoutInitiate
-    // AND between retries). Cannot "recover" because we don't know
-    // the original txHash — ask the client to use a fresh key.
+  it("on-chain AlreadyWithdrawn exhausts MAX_BURNED_RETRIES and returns 422 CASHOUT_FAILED", async () => {
+    // The server retries with 3 fresh hashes before giving up. If
+    // ALL of them revert (simulated as a sustained bug — e.g. the
+    // operator's keys were burned across multiple deployments), the
+    // server returns 422 CASHOUT_FAILED with the failed withdrawal
+    // so the user can see the debit was reversed.
     const withdrawFn = vi.fn(async () => {
       throw new Error(
         "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741",
@@ -371,8 +372,12 @@ describe("POST /api/cashout", () => {
           },
           body: JSON.stringify({ amountUSD: 0.1 }),
         });
-        expect(status).toBe(409);
-        expect(body.code).toBe("IDEMPOTENCY_CONFLICT");
+        // 1 initial + 3 retries = 4 withdrawFn calls before the
+        // server gives up and emits CASHOUT_FAILED.
+        expect(withdrawFn).toHaveBeenCalledTimes(4);
+        expect(status).toBe(422);
+        expect(body.code).toBe("CASHOUT_FAILED");
+        expect(body.withdrawal.status).toBe("FAILED");
       },
     );
   });

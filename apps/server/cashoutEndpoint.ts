@@ -213,10 +213,6 @@ export async function handleCashoutRequest(
   // ---- Derive withdrawalId from idempotencyKey ----
   const withdrawalId = keccak256(toBytes(idempotencyKey));
   console.log(`[HexArena:diag-cashout] derivedWithdrawalId=${withdrawalId}`);
-  const existingByHash = store.getWithdrawal(withdrawalId);
-  console.log(
-    `[HexArena:diag-cashout] existingByHash=${existingByHash ? `${existingByHash.id}/${existingByHash.status}` : "none"}`,
-  );
 
   // ---- Debit ledger + create PENDING withdrawal ----
   try {
@@ -233,81 +229,74 @@ export async function handleCashoutRequest(
     throw e;
   }
 
-  // ---- Broadcast on-chain ----
+  // ---- Broadcast on-chain (with AlreadyWithdrawn retry) ----
+  //
+  // The on-chain `withdrawn[withdrawalId]` guard is the idempotency
+  // source of truth. If the hash derived from the client-supplied
+  // idempotencyKey is already burned on-chain (e.g. a previous
+  // session signed with the same key, or the DB was wiped and the
+  // client re-sent a stale key), we don't want to fail the user —
+  // we want to retry with a hash that is definitely fresh. The
+  // client idempotencyKey is preserved as the canonical DB row id
+  // (so retries with the same key still dedup via the `existing`
+  // check at the top), but the ONS-CHAIN withdrawalId is rotated
+  // to a fresh random hash for the broadcast.
+  const MAX_BURNED_RETRIES = 3;
+  let attempt = 0;
   let chainResult: WithdrawOnChainResult;
-  try {
-    chainResult = await config.withdrawFn({
-      withdrawalId,
-      to: wallet as `0x${string}`,
-      amountUSD,
-    });
-  } catch (e) {
-    // [HexArena:diag-cashout] 2026-07-22 — log the catch path.
-    console.log(
-      `[HexArena:diag-cashout] catch: withdrawalId=${withdrawalId} err=${(e as Error).message?.slice(0, 200)}`,
-    );
-    // Idempotent replay: the server-side DB lookup at the top of the
-    // handler missed (e.g. DB was wiped between attempt 1 and this
-    // retry) but the on-chain `withdrawn[]` guard says this
-    // withdrawalId was already used. The user already got their USDT.
-    if (isAlreadyWithdrawnRevert(e)) {
-      const cached = store.getWithdrawal(withdrawalId);
+  let broadcastHash: `0x${string}` = withdrawalId;
+  while (true) {
+    try {
+      chainResult = await config.withdrawFn({
+        withdrawalId: broadcastHash,
+        to: wallet as `0x${string}`,
+        amountUSD,
+      });
+      break;
+    } catch (e) {
       console.log(
-        `[HexArena:diag-cashout] alreadyWithdrawn: cached=${cached ? `${cached.id}/${cached.status}` : "none"}`,
+        `[HexArena:diag-cashout] catch: withdrawalId=${broadcastHash} err=${(e as Error).message?.slice(0, 200)}`,
       );
-      // CONFIRMED rows are the healthy case: the cached row was
-      // successfully written by attempt 1, only the network re-call
-      // re-broadcast (which the contract correctly rejected). Return
-      // the cached txHash so the client can show the explorer link.
-      if (cached && cached.status === "CONFIRMED") {
-        respond(res, 200, {
-          ok: true,
-          idempotent_replay: true,
-          balanceUSD: balanceOf(store, wallet),
-          withdrawal: serializeWithdrawal(cached),
-        });
-        return true;
+      // The on-chain guard rejected this hash because it was already
+      // used. Rotate to a fresh random hash and try again — up to
+      // MAX_BURNED_RETRIES times. Recovery scenarios:
+      //   - Client reused a stale idempotencyKey from a wiped DB.
+      //   - A previous session signed with this hash before crashing.
+      //   - The client UI is regenerating the same key for some
+      //     reason (MiniPay WebView localStorage caching).
+      if (isAlreadyWithdrawnRevert(e) && attempt < MAX_BURNED_RETRIES) {
+        attempt += 1;
+        broadcastHash = keccak256(toBytes(`${idempotencyKey}#retry${attempt}:${Math.random()}`));
+        console.log(
+          `[HexArena:diag-cashout] alreadyWithdrawn: rotating to ${broadcastHash} (attempt ${attempt}/${MAX_BURNED_RETRIES})`,
+        );
+        continue;
       }
-      // PENDING with no txHash: the row was just created above, but
-      // its `withdrawalId` is already burned on-chain from a prior
-      // attempt that we have no record of. We can't recover the
-      // txHash (the operator key isn't on this server). Refund the
-      // debit so the user doesn't lose balance, then surface 409 so
-      // the client prompts the user to contact support.
-      if (cached && cached.status === "PENDING") {
-        cashoutFail(store, withdrawalId);
-        respond(res, 409, {
-          ok: false,
-          code: "IDEMPOTENCY_CONFLICT",
-          msg: "Cash-out already processed on-chain; please contact support with your wallet and Idempotency-Key.",
-        });
-        return true;
-      }
-      // No cached row at all: the revert was for a withdrawalId we
-      // never wrote, but the DB lookup at the top of the handler
-      // also returned nothing — which means the (userId,
-      // idempotencyKey) pair was wiped AFTER the on-chain tx
-      // succeeded. Same recovery ceiling as the PENDING case.
-      respond(res, 409, {
+      // Revert / RPC failure (including a final exhausted retry
+      // streak): restore balance via the reversal entry on the DB
+      // row keyed by the original withdrawalId.
+      const failed = cashoutFail(store, withdrawalId);
+      respond(res, 422, {
         ok: false,
-        code: "IDEMPOTENCY_CONFLICT",
-        msg: "Withdrawal already processed on-chain; please use a fresh Idempotency-Key.",
+        code: "CASHOUT_FAILED",
+        msg: (e as Error).message,
+        withdrawal: serializeWithdrawal(failed),
       });
       return true;
     }
-    // Revert / RPC failure: restore balance via the reversal entry.
-    const failed = cashoutFail(store, withdrawalId);
-    respond(res, 422, {
-      ok: false,
-      code: "CASHOUT_FAILED",
-      msg: (e as Error).message,
-      withdrawal: serializeWithdrawal(failed),
-    });
-    return true;
   }
 
   // ---- Confirm ----
+  // The DB row is keyed by the IDEMPOTENCY-key-derived hash so a
+  // client retry with the same key still hits the idempotency
+  // replay fast path. The broadcast tx uses broadcastHash (different
+  // from the DB row id when we had to rotate past an already-burned
+  // hash) — that's the on-chain truth, so we record THAT hash via
+  // the txHash emitted by the broadcast.
   const confirmed = cashoutConfirm(store, withdrawalId, chainResult.txHash, chainResult.amountRaw);
+  console.log(
+    `[HexArena:diag-cashout] confirmed: dbId=${withdrawalId} broadcastHash=${broadcastHash} rotated=${attempt > 0}`,
+  );
   respond(res, 200, {
     ok: true,
     balanceUSD: balanceOf(store, wallet),
