@@ -9,13 +9,19 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createServer as createHttpServer } from "node:http";
 import { Server as SocketIOServer } from "socket.io";
+import { keccak256, toBytes } from "viem";
 import { MemoryLedgerStore } from "./ledger/memoryStore";
 import { creditDeposit } from "./ledger/ledger";
 import { handleCashoutRequest, type WithdrawOnChainConfig } from "./cashoutEndpoint";
 import type { WithdrawOnChainResult } from "./chain/withdraw";
 
 const USER = "0x2222222222222222222222222222222222222222";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * After the idempotency-key-as-withdrawalId fix, the `id` field on
+ * a withdrawal row is `keccak256(idempotencyKey)`, a 0x-prefixed
+ * 32-byte hex string (66 chars).
+ */
+const HASHED_ID_RE = /^0x[0-9a-f]{64}$/i;
 
 function mountHttp(withdrawFn: WithdrawOnChainConfig["withdrawFn"]) {
   const http = createHttpServer();
@@ -66,8 +72,8 @@ const IDEMPOTENCY_KEY = "550e8400-e29b-41d4-a716-446655440001";
 
 function defaultWithdrawFn(
   impl?: (args: {
-    withdrawalId: string;
-    to: string;
+    withdrawalId: `0x${string}`;
+    to: `0x${string}`;
     amountUSD: number;
   }) => Promise<Partial<WithdrawOnChainResult>>,
 ): WithdrawOnChainConfig["withdrawFn"] {
@@ -125,7 +131,7 @@ describe("POST /api/cashout", () => {
         expect(body.withdrawal.txHash).toBe("0xhappyhash");
         expect(body.withdrawal.amountUSD).toBeCloseTo(0.1, 5);
         expect(body.withdrawal.netReceivedUSD).toBeCloseTo(0.1, 4);
-        expect(body.withdrawal.id).toMatch(UUID_RE);
+        expect(body.withdrawal.id).toMatch(HASHED_ID_RE);
       },
     );
   });
@@ -284,6 +290,89 @@ describe("POST /api/cashout", () => {
         // ledger inspection if we expose the store. For now, the
         // FAILED status on the returned withdrawal is enough.)
         expect(body.withdrawal.status).toBe("FAILED");
+      },
+    );
+  });
+
+  it("on-chain AlreadyWithdrawn: returns 200 idempotent_replay when the cached row exists", async () => {
+    // Scenario: the DB row was lost (e.g. SQLite volume wiped between
+    // attempt 1 and attempt 2) but the contract's `withdrawn[]` guard
+    // says attempt 1 already paid out. The server must NOT error out
+    // — it must surface the cached PENDING row so the client sees
+    // "already done" instead of a CASHOUT_FAILED spam.
+    const cachedId = keccak256(toBytes(IDEMPOTENCY_KEY));
+    const withdrawFn = vi.fn(async () => {
+      throw new Error(
+        "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741, args: 0x...",
+      );
+    });
+    await withServer(
+      (store) => {
+        store.upsertUser(USER, USER);
+        creditDeposit(store, USER, "0xdephash", 1.0);
+        // Pre-seed the row the optimistic path would have written
+        // in attempt 1 — only the cache row is missing on the local
+        // server, but the on-chain withdraw still happened.
+        store.createWithdrawal({
+          id: cachedId,
+          userId: USER,
+          amountUSD: 0.1,
+          amountRaw: 0.1 / 0.985,
+          txHash: "0xfirsttxhash",
+          status: "CONFIRMED",
+          idempotencyKey: IDEMPOTENCY_KEY,
+          confirmedAt: Date.now(),
+          failedAt: null,
+        });
+      },
+      withdrawFn,
+      async (port) => {
+        const { status, body } = await fetchJson(`http://127.0.0.1:${port}/api/cashout`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-wallet-address": USER,
+            "idempotency-key": IDEMPOTENCY_KEY,
+          },
+          body: JSON.stringify({ amountUSD: 0.1 }),
+        });
+        expect(status).toBe(200);
+        expect(body.idempotent_replay).toBe(true);
+        expect(body.withdrawal.id).toBe(cachedId);
+        expect(body.withdrawal.status).toBe("CONFIRMED");
+        expect(body.withdrawal.txHash).toBe("0xfirsttxhash");
+      },
+    );
+  });
+
+  it("on-chain AlreadyWithdrawn with no cached row: returns 409 IDEMPOTENCY_CONFLICT", async () => {
+    // Even rarer scenario: the withdrawalId burned on-chain was
+    // never persisted locally (e.g. Crash before cashoutInitiate
+    // AND between retries). Cannot "recover" because we don't know
+    // the original txHash — ask the client to use a fresh key.
+    const withdrawFn = vi.fn(async () => {
+      throw new Error(
+        "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741",
+      );
+    });
+    await withServer(
+      (store) => {
+        store.upsertUser(USER, USER);
+        creditDeposit(store, USER, "0xdephash", 1.0);
+      },
+      withdrawFn,
+      async (port) => {
+        const { status, body } = await fetchJson(`http://127.0.0.1:${port}/api/cashout`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-wallet-address": USER,
+            "idempotency-key": IDEMPOTENCY_KEY,
+          },
+          body: JSON.stringify({ amountUSD: 0.1 }),
+        });
+        expect(status).toBe(409);
+        expect(body.code).toBe("IDEMPOTENCY_CONFLICT");
       },
     );
   });

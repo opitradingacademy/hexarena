@@ -1,9 +1,11 @@
 /**
  * Chain withdraw adapter — real viem implementation (PR1 of cash-out).
  *
- * Calls `ArenaSettlement.withdrawUser(withdrawalIdHash, to, amountRaw)`
- * on Celo Mainnet. The withdrawalId (a uuid v4) is hashed to bytes32
- * by the contract's idempotency map — replays are safe.
+ * Calls `ArenaSettlement.withdrawUser(withdrawalId, to, amountRaw)` on
+ * Celo Mainnet. The caller pre-hashes any user-facing identifier
+ * (idempotency key) to a bytes32 — this layer is a thin signer and
+ * does NOT hash the input again. Replays are safe on-chain because
+ * the contract's `withdrawn[withdrawalId]` guard rejects duplicates.
  *
  * Fee absorption: the USDT token on Celo Mainnet charges ~1.5% on each
  * transfer (community fund fee embedded in the token). The contract
@@ -15,7 +17,7 @@
  * The operator signing key is read from `OPERATOR_PRIVATE_KEY` (same
  * env var as settleOnChain).
  */
-import { createWalletClient, http, keccak256, parseUnits, toBytes, type Address } from "viem";
+import { createWalletClient, http, parseUnits, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { celo } from "viem/chains";
 import { ARENA_SETTLEMENT_ABI, ARENA_SETTLEMENT_ADDRESS } from "@hexarena/shared/chain";
@@ -38,7 +40,14 @@ export type WithdrawOnChainResult = {
 };
 
 export type WithdrawOnChainParams = {
-  withdrawalId: string;
+  /**
+   * 32-byte hash (0x-prefixed hex) identifying this cash-out on-chain.
+   * The endpoint derives this as `keccak256(idempotencyKey)` so the
+   * on-chain `withdrawn[withdrawalId]` guard serves as the
+   * ultimate idempotency authority — DB loss does not enable a
+   * double-payout.
+   */
+  withdrawalId: `0x${string}`;
   to: `0x${string}`;
   amountUSD: number;
 };
@@ -48,12 +57,34 @@ const DEFAULT_RPC_URL = "https://forno.celo.org";
 const SETTLEMENT_TOKEN_DECIMALS = 6;
 
 /**
- * `withdrawalId` is a UUID, not natively `bytes32` — hash it
- * deterministically so the contract's `withdrawn[id]` idempotency map
- * has a stable key per request.
+ * Selector of the `AlreadyWithdrawn(bytes32)` custom error in
+ * `ArenaSettlement.sol`. We match the FIRST 4 bytes of the revert
+ * data so we can distinguish "this withdrawal was already settled
+ * on-chain" (idempotent — return cached state) from a real revert
+ * (InsufficientFloat, NotOperator, etc.).
+ *
+ * Computed: keccak256("AlreadyWithdrawn(bytes32)")[0:4] = 0x51dd3741.
+ * Hardcoding the constant is intentional — recomputing it at runtime
+ * costs a keccak hash on every revert and the ABI is immutable.
  */
-function withdrawalIdToBytes32(withdrawalId: string): `0x${string}` {
-  return keccak256(toBytes(withdrawalId));
+export const ALREADY_WITHDRAWN_SELECTOR = "0x51dd3741" as const;
+
+/**
+ * Returns true iff the error message from a viem
+ * `ContractFunctionExecutionError` looks like the on-chain
+ * `AlreadyWithdrawn` revert. Used by `cashoutEndpoint.ts` to decide
+ * between "idempotent replay (200)" and "terminal failure (422)".
+ *
+ * viem embeds the raw revert data in the error message inside the
+ * "Details:" footer and ALSO in `error.data` / `error.cause.data` —
+ * we check the message because that's the most stable surface across
+ * viem 2.x minor versions.
+ */
+export function isAlreadyWithdrawnRevert(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const msg = (e as { message?: string; shortMessage?: string }).message ?? "";
+  const short = (e as { shortMessage?: string }).shortMessage ?? "";
+  return msg.includes(ALREADY_WITHDRAWN_SELECTOR) || short.includes(ALREADY_WITHDRAWN_SELECTOR);
 }
 
 export async function withdrawUsdtOnChain(
@@ -87,7 +118,7 @@ export async function withdrawUsdtOnChain(
     abi: ARENA_SETTLEMENT_ABI,
     functionName: "withdrawUser",
     args: [
-      withdrawalIdToBytes32(withdrawalId),
+      withdrawalId,
       to as Address,
       parseUnits(amountRaw.toFixed(SETTLEMENT_TOKEN_DECIMALS), SETTLEMENT_TOKEN_DECIMALS),
     ],

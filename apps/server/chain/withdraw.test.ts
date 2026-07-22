@@ -16,6 +16,13 @@ vi.mock("viem/accounts", () => ({
   privateKeyToAccount: vi.fn(() => ({ address: "0xoperator" })),
 }));
 
+/**
+ * The endpoint pre-hashes `idempotencyKey` to bytes32. The chain
+ * adapter receives that bytes32 directly — these tests mirror the
+ * production contract.
+ */
+const HASHED_ID = keccak256(toBytes("550e8400-e29b-41d4-a716-446655440000"));
+
 describe("withdrawUsdtOnChain", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -27,7 +34,7 @@ describe("withdrawUsdtOnChain", () => {
     const { withdrawUsdtOnChain } = await import("./withdraw");
 
     const result = await withdrawUsdtOnChain({
-      withdrawalId: "550e8400-e29b-41d4-a716-446655440000",
+      withdrawalId: HASHED_ID,
       to: "0x000000000000000000000000000000000000aa",
       amountUSD: 1.0,
     });
@@ -37,8 +44,8 @@ describe("withdrawUsdtOnChain", () => {
     // Function name MUST be the user-facing withdrawUser (NOT settle and
     // NOT a raw USDT.transfer — single contract path per design).
     expect(call.functionName).toBe("withdrawUser");
-    // Args: hashed withdrawalId, recipient, amountRaw in 6-decimal units.
-    expect(call.args[0]).toBe(keccak256(toBytes("550e8400-e29b-41d4-a716-446655440000")));
+    // Args: pre-hashed bytes32, recipient, amountRaw in 6-decimal units.
+    expect(call.args[0]).toBe(HASHED_ID);
     expect(call.args[1]).toBe("0x000000000000000000000000000000000000aa");
     // 1.00 / 0.985 = 1.015228426395939, rounded to 6-decimal precision = 1.015228
     // → 1015228 raw (6 decimals). We assert the call ran with a value
@@ -66,7 +73,7 @@ describe("withdrawUsdtOnChain", () => {
     for (const { amountUSD, expectedRaw } of cases) {
       writeContract.mockClear();
       await withdrawUsdtOnChain({
-        withdrawalId: "550e8400-e29b-41d4-a716-446655440000",
+        withdrawalId: HASHED_ID,
         to: "0x000000000000000000000000000000000000aa",
         amountUSD,
       });
@@ -82,7 +89,7 @@ describe("withdrawUsdtOnChain", () => {
 
     await expect(
       withdrawUsdtOnChain({
-        withdrawalId: "m1",
+        withdrawalId: HASHED_ID,
         to: "0x000000000000000000000000000000000000aa",
         amountUSD: 0.1,
       }),
@@ -97,7 +104,7 @@ describe("withdrawUsdtOnChain", () => {
 
     for (const amountUSD of [0.1, 0.5, 1.0, 5.0, 50.0]) {
       const r = await withdrawUsdtOnChain({
-        withdrawalId: "550e8400-e29b-41d4-a716-446655440000",
+        withdrawalId: HASHED_ID,
         to: "0x000000000000000000000000000000000000aa",
         amountUSD,
       });
@@ -109,5 +116,22 @@ describe("withdrawUsdtOnChain", () => {
       expect(r.amountRaw).toBeCloseTo(amountUSD / 0.985, 4);
       expect(r.feeAbsorbedUSD).toBeCloseTo(r.amountRaw - amountUSD, 4);
     }
+  });
+
+  it("isAlreadyWithdrawnRevert detects the 0x51dd3741 selector in viem ContractFunctionExecutionError", async () => {
+    const { isAlreadyWithdrawnRevert } = await import("./withdraw");
+    // Mimic the viem error shape produced on a real revert.
+    const viemError = new Error(
+      "The contract function 'withdrawUser' reverted with the following signature: 0x51dd3741, args: ...",
+    );
+    expect(isAlreadyWithdrawnRevert(viemError)).toBe(true);
+
+    // Other reverts (InsufficientFloat, NotOperator, generic throw) are NOT
+    // mistaken for AlreadyWithdrawn.
+    expect(isAlreadyWithdrawnRevert(new Error("execution reverted"))).toBe(false);
+    expect(isAlreadyWithdrawnRevert(new Error("network error"))).toBe(false);
+    expect(isAlreadyWithdrawnRevert(null)).toBe(false);
+    expect(isAlreadyWithdrawnRevert(undefined)).toBe(false);
+    expect(isAlreadyWithdrawnRevert("0x51dd3741 raw string")).toBe(false);
   });
 });

@@ -3,18 +3,28 @@
  * send USDT to their wallet on-chain via the redeployed
  * ArenaSettlement.withdrawUser() function.
  *
- * Flow (per PR1 design):
+ * Flow (per PR1 design, with hash-as-withdrawalId fix):
  *   1. Validate wallet + idempotency key + amount headers/body.
- *   2. Check idempotency: if (wallet, idempotencyKey) already exists
- *      → return current state with 200 + idempotent_replay: true.
- *      (Same amount → ok. Different amount → 409 IDEMPOTENCY_CONFLICT.)
- *   3. Call `cashoutInitiate()` — atomic ledger debit + PENDING row.
- *   4. Call `withdrawFn()` — viem chain broadcast. Idempotent on
- *      the withdrawalId so a re-broadcast is safe.
- *   5. On success: `cashoutConfirm()` — 200 with full withdrawal
+ *   2. Lookup idempotency by (userId, idempotencyKey). If match → 200
+ *      with idempotent_replay: true (same amount) or 409 (different
+ *      amount).
+ *   3. Compute `withdrawalId = keccak256(idempotencyKey)`. The same
+ *      idempotency key ALWAYS hashes to the same bytes32, so the
+ *      on-chain `withdrawn[withdrawalId]` guard is the ultimate
+ *      idempotency authority — DB loss does not enable a
+ *      double-payout.
+ *   4. `cashoutInitiate()` — atomic ledger debit + PENDING row.
+ *   5. `withdrawFn()` — viem signs + broadcasts `withdrawUser(hash,
+ *      to, amountRaw)`. On-chain revert types:
+ *      - `AlreadyWithdrawn` (0x51dd3741) + DB-CONFIRMED row → 200
+ *        idempotent_replay (the user already got their USDT).
+ *      - `AlreadyWithdrawn` + DB-PENDING (or no row) → 409
+ *        IDEMPOTENCY_CONFLICT (we can't recover the txHash — ask
+ *        the user to contact support).
+ *      - any other revert / RPC failure → `cashoutFail()` +
+ *        422 CASHOUT_FAILED.
+ *   6. On success: `cashoutConfirm()` — 200 with full withdrawal
  *      record.
- *   6. On revert: `cashoutFail()` — writes WITHDRAW_REVERSAL,
- *      restores balance, returns 422 CASHOUT_FAILED.
  *
  * Auth: caller declares their wallet via the X-Wallet-Address header.
  * MVP-trust, no signed challenge. The chain tx itself proves the
@@ -31,8 +41,7 @@
  * Response 500: { ok: false, code: "CONFIG_ERROR" }
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isAddress, getAddress } from "viem";
-import { randomUUID } from "node:crypto";
+import { isAddress, getAddress, keccak256, toBytes } from "viem";
 import {
   cashoutInitiate,
   cashoutConfirm,
@@ -44,6 +53,7 @@ import { InsufficientBalanceError } from "./ledger/errors";
 import type { LedgerStore } from "./ledger/types";
 import { applyCorsHeaders } from "./cors";
 import type { WithdrawOnChainResult } from "./chain/withdraw";
+import { isAlreadyWithdrawnRevert } from "./chain/withdraw";
 
 export type WithdrawOnChainConfig = {
   /**
@@ -55,7 +65,8 @@ export type WithdrawOnChainConfig = {
    * the real signer with `vi.mock()`.
    */
   withdrawFn: (args: {
-    withdrawalId: string;
+    /** 32-byte hash (0x-prefixed) — typically `keccak256(idempotencyKey)`. */
+    withdrawalId: `0x${string}`;
     to: `0x${string}`;
     amountUSD: number;
   }) => Promise<WithdrawOnChainResult>;
@@ -191,8 +202,35 @@ export async function handleCashoutRequest(
     return true;
   }
 
+  // ---- Derive withdrawalId from idempotencyKey ----
+  //
+  // Why `keccak256(idempotencyKey)` instead of `randomUUID()`?
+  //
+  // The on-chain `withdrawUser(withdrawalId, ...)` is gated by
+  // `withdrawn[withdrawalId]`. If we signed with a fresh random UUID
+  // per request, a retry of the SAME logical cash-out (same
+  // idempotencyKey) would sign with a DIFFERENT random UUID — but
+  // because the user already got their USDT, a second post would
+  // only succeed if the contract still has float, and the user would
+  // get paid twice. The Random-UUID approach handles this via the
+  // DB-side `(userId, idempotencyKey)` check, BUT the on-chain
+  // `withdrawn[]` is the only guard if the DB row was lost (e.g.,
+  // SQLite volume wiped between attempt 1 and attempt 2 while the
+  // tx already mined on-chain).
+  //
+  // A deterministic `withdrawalId = keccak256(idempotencyKey)` makes
+  // the on-chain guard authoritative: any retry with the same key
+  // hits `withdrawn[...] == true` and reverts `AlreadyWithdrawn`,
+  // which the server recognizes as an idempotent replay (below) and
+  // returns the cached row. The DB lookup is the fast path; the
+  // on-chain revert is the recovery path.
+  //
+  // The "id" column in the withdrawals table is now a 0x-prefixed
+  // bytes32 hash (66 chars), still TEXT PRIMARY KEY — no schema
+  // migration needed.
+  const withdrawalId = keccak256(toBytes(idempotencyKey));
+
   // ---- Debit ledger + create PENDING withdrawal ----
-  const withdrawalId = randomUUID();
   try {
     cashoutInitiate(store, wallet, withdrawalId, amountUSD, idempotencyKey);
   } catch (e) {
@@ -216,6 +254,52 @@ export async function handleCashoutRequest(
       amountUSD,
     });
   } catch (e) {
+    // Idempotent replay: the server-side DB lookup at the top of the
+    // handler missed (e.g. DB was wiped between attempt 1 and this
+    // retry) but the on-chain `withdrawn[]` guard says this
+    // withdrawalId was already used. The user already got their USDT.
+    if (isAlreadyWithdrawnRevert(e)) {
+      const cached = store.getWithdrawal(withdrawalId);
+      // CONFIRMED rows are the healthy case: the cached row was
+      // successfully written by attempt 1, only the network re-call
+      // re-broadcast (which the contract correctly rejected). Return
+      // the cached txHash so the client can show the explorer link.
+      if (cached && cached.status === "CONFIRMED") {
+        respond(res, 200, {
+          ok: true,
+          idempotent_replay: true,
+          balanceUSD: balanceOf(store, wallet),
+          withdrawal: serializeWithdrawal(cached),
+        });
+        return true;
+      }
+      // PENDING with no txHash: the row was just created above, but
+      // its `withdrawalId` is already burned on-chain from a prior
+      // attempt that we have no record of. We can't recover the
+      // txHash (the operator key isn't on this server). Refund the
+      // debit so the user doesn't lose balance, then surface 409 so
+      // the client prompts the user to contact support.
+      if (cached && cached.status === "PENDING") {
+        cashoutFail(store, withdrawalId);
+        respond(res, 409, {
+          ok: false,
+          code: "IDEMPOTENCY_CONFLICT",
+          msg: "Cash-out already processed on-chain; please contact support with your wallet and Idempotency-Key.",
+        });
+        return true;
+      }
+      // No cached row at all: the revert was for a withdrawalId we
+      // never wrote, but the DB lookup at the top of the handler
+      // also returned nothing — which means the (userId,
+      // idempotencyKey) pair was wiped AFTER the on-chain tx
+      // succeeded. Same recovery ceiling as the PENDING case.
+      respond(res, 409, {
+        ok: false,
+        code: "IDEMPOTENCY_CONFLICT",
+        msg: "Withdrawal already processed on-chain; please use a fresh Idempotency-Key.",
+      });
+      return true;
+    }
     // Revert / RPC failure: restore balance via the reversal entry.
     const failed = cashoutFail(store, withdrawalId);
     respond(res, 422, {

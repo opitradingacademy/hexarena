@@ -34,9 +34,11 @@ export type LedgerEntryKind =
   "DEPOSIT" | "HOLD" | "RELEASE" | "PAYOUT" | "REFUND" | "WITHDRAW" | "WITHDRAW_REVERSAL";
 
 /**
- * Cash-out request record. `id` is a uuid v4 (also the `withdrawalId`
- * sent to the contract, hashed to bytes32 by the chain adapter). The
- * flow is: create PENDING (with ledger debited) → CONFIRMED (with txHash)
+ * Cash-out request record. `id` is `keccak256(idempotencyKey)` — a
+ * 0x-prefixed bytes32 hex string. The same idempotencyKey always
+ * hashes to the same `id`, so the on-chain `withdrawn[withdrawalId]`
+ * guard maps directly to a row in this table. The flow is:
+ * create PENDING (with ledger debited) → CONFIRMED (with txHash)
  * → or FAILED (with WITHDRAW_REVERSAL ledger entry restoring balance).
  */
 export type Withdrawal = {
