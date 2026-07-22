@@ -139,9 +139,14 @@ export function CashoutDialog({
       const msg = err instanceof CashoutError ? err.msg : err.message || "Cash out failed";
       // CASHOUT_FAILED on-chain revert: terminal — clear the key so
       // a retry gets a fresh uuid v4 (different attempt is a new
-      // operation). For transient network errors and idempotent
-      // 4xx/5xx, KEEP the key so Retry replays safely.
-      const isTerminal = code === "CASHOUT_FAILED";
+      // operation). IDEMPOTENCY_CONFLICT is also terminal: the server
+      // detected that the on-chain `withdrawn[keccak256(key)]` guard
+      // already burned the hash for this key, so the same key will
+      // always revert. A fresh attempt with a NEW key hashes to a
+      // different bytes32 and will not collide. For transient network
+      // errors and other 4xx/5xx, KEEP the key so Retry replays
+      // safely.
+      const isTerminal = code === "CASHOUT_FAILED" || code === "IDEMPOTENCY_CONFLICT";
       if (isTerminal) {
         clearIdempotencyKey({ wallet, amountUSD, attempt });
         setAttempt((a) => a + 1);

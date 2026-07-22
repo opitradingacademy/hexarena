@@ -182,6 +182,36 @@ describe("CashoutDialog", () => {
     expect(secondKey).not.toBe(firstKey);
   });
 
+  it("Try again after 409 IDEMPOTENCY_CONFLICT uses a NEW idempotency key", async () => {
+    // The server returned 409 because the on-chain `withdrawn[]`
+    // guard already burned keccak256(key) for this exact key. Same
+    // key will always revert — the dialog must clear and bump
+    // attempt so the next call hashes to a fresh bytes32.
+    mockedRequest.mockRejectedValueOnce(
+      new CashoutError(
+        "IDEMPOTENCY_CONFLICT",
+        "Cash-out already processed on-chain; please contact support with your wallet and Idempotency-Key.",
+        409,
+      ),
+    );
+    mockedRequest.mockResolvedValueOnce(CONFIRMATION_BODY);
+    const onSuccess = vi.fn();
+    render(<CashoutDialog {...defaultProps()} onSuccess={onSuccess} />);
+
+    fireEvent.click(screen.getByTestId("cashout-confirm"));
+    await waitFor(() => expect(screen.getByTestId("cashout-error-code")).toBeInTheDocument());
+    expect(screen.getByTestId("cashout-error-code").textContent).toMatch(/IDEMPOTENCY_CONFLICT/);
+
+    const firstKey = mockedRequest.mock.calls[0][0].idempotencyKey;
+    fireEvent.click(screen.getByTestId("cashout-try-again"));
+    await waitFor(() => expect(screen.getByTestId("cashout-confirm")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("cashout-confirm"));
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+    const secondKey = mockedRequest.mock.calls[1][0].idempotencyKey;
+    expect(secondKey).not.toBe(firstKey);
+  });
+
   it("network error shows the error message and keeps the dialog open", async () => {
     mockedRequest.mockRejectedValueOnce(
       new CashoutError("NETWORK", "Network error — check your connection", 0),
